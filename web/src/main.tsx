@@ -1,11 +1,10 @@
-import Restore from "./pages/Restore";
+import Policies from "./pages/Policies";
 import Repositories from "./pages/Repositories";
 import Login from "./Login";
 import Overview from "./pages/Overview";
 import SnapshotPage from "./pages/SnapshotPage";
 import Protocols from "./pages/Protocols";
 import Replications from "./pages/Replications";
-import RestoreHistory from "./pages/RestoreHistory";
 import Jobs from "./pages/Jobs";
 import Monitor from "./pages/Monitor";
 import System from "./pages/System";
@@ -61,9 +60,9 @@ import {
 const nav = [
   ["overview", "概览", IconDashboard],
   ["repositories", "备份仓库", IconStorage],
-  ["snapshots", "快照与策略", IconCamera],
-  ["protocols", "访问协议", IconLink],
-  ["restore", "数据恢复", IconHistory],
+  ["snapshots", "快照", IconCamera],
+  ["policies", "快照策略", IconSettings],
+  ["protocols", "共享访问", IconLink],
   ["replication", "异地复制", IconSync],
   ["monitor", "监控告警", IconDashboard],
   ["jobs", "任务中心", IconList],
@@ -73,7 +72,10 @@ const nav = [
 function App() {
   const { user, set } = useAuth();
   const [checking, setChecking] = useState(true);
-  const [page, setPage] = useState(location.hash.slice(1) || "overview");
+  const [page, setPage] = useState(
+    (location.hash === "#restore" ? "snapshots" : location.hash.slice(1)) ||
+      "overview",
+  );
   const [rev, setRev] = useState(0);
   const [dialog, setDialog] = useState<{
     title: string;
@@ -93,7 +95,11 @@ function App() {
       .finally(() => setChecking(false));
   }, []);
   useEffect(() => {
-    const onHash = () => setPage(location.hash.slice(1) || "overview");
+    const onHash = () =>
+      setPage(
+        (location.hash === "#restore" ? "snapshots" : location.hash.slice(1)) ||
+          "overview",
+      );
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -235,10 +241,14 @@ function App() {
                       overview: "掌握备份基础设施与数据保护任务的实时状态",
                       repositories:
                         "管理文件与块存储仓库，为业务数据建立独立的保护空间",
-                      snapshots: "管理恢复时间点与分层保留策略",
-                      protocols: "通过受控的 NFS 与 iSCSI 连接业务服务器",
-                      restore: "从可验证的历史版本恢复数据与业务",
-                      replication: "将备份复制到独立主机，降低单设备故障风险",
+                      snapshots:
+                        "管理快照，或基于快照创建新仓库并通过共享访问挂载查看内容",
+                      policies:
+                        "设置分层保留数量，系统自动计算快照频率并清理过期恢复点",
+                      protocols:
+                        "按仓库类型添加 NFS 或 iSCSI 访问方式，管理客户端权限与挂载入口",
+                      replication:
+                        "通过 SSH 将快照增量复制到独立主机，支持严格主机验证和中断续传；接收端快照 GUID 校验成功后推进复制基线",
                       monitor: "跟踪存储健康、容量变化与待处理告警",
                       jobs: "所有存储操作的执行状态与结果",
                       system: "管理账号、安全配置与设备信息",
@@ -294,15 +304,14 @@ function App() {
               showText={setText}
             />
           )}
-          {page === "restore" && (
-            <Restore
-              snapshots={snaps.data}
+          {page === "policies" && (
+            <Policies
               repos={repos.data}
+              rev={rev}
               admin={admin}
               form={form}
               perform={perform}
-              rev={rev}
-              browse={setBrowser}
+              refresh={refresh}
             />
           )}
 
@@ -339,7 +348,7 @@ function App() {
         <footer>
           <span>Backup Center</span>
           <span>独立备份 · 定期验证 · 从容恢复</span>
-          <span>v{overview.data?.version || "1.0.0"}</span>
+          <span>v{overview.data?.version || "1.1.0"}</span>
         </footer>
       </div>
       {dialog && (

@@ -14,7 +14,18 @@ import (
 	"time"
 )
 
-func (a *App) listPolicies(c *gin.Context) { var rows []Policy; a.DB.Find(&rows); c.JSON(200, rows) }
+func (a *App) listPolicies(c *gin.Context) {
+	var rows []Policy
+	if err := a.DB.Find(&rows).Error; err != nil {
+		failure(c, 500, err)
+		return
+	}
+	views := make([]map[string]any, 0, len(rows))
+	for _, p := range rows {
+		views = append(views, policyView(p))
+	}
+	c.JSON(200, views)
+}
 func (a *App) savePolicy(c *gin.Context) {
 	var q Policy
 	if !body(c, &q) {
@@ -28,6 +39,7 @@ func (a *App) savePolicy(c *gin.Context) {
 		failure(c, 400, e)
 		return
 	}
+	q.Cron = policyCron(q)
 	var old Policy
 	a.DB.First(&old, "repository_id = ?", q.RepositoryID)
 	q.ID = old.ID
@@ -39,8 +51,9 @@ func (a *App) savePolicy(c *gin.Context) {
 		failure(c, 500, e)
 		return
 	}
-	a.audit(current(c).ID, current(c).Username, "policy.save", fmt.Sprint(q.RepositoryID), q.Cron, c.ClientIP())
-	c.JSON(200, q)
+	a.audit(current(c).ID, current(c).Username, "policy.save", fmt.Sprint(q.RepositoryID), fmt.Sprint(policyView(q)["schedule_label"]), c.ClientIP())
+	a.signalPolicies()
+	c.JSON(200, policyView(q))
 }
 func (a *App) retentionPreview(c *gin.Context) {
 	id, e := paramID(c)
@@ -81,7 +94,7 @@ func (a *App) saveExport(c *gin.Context) {
 		failure(c, 404, e)
 		return
 	}
-	if e = validateExport(q, r); e != nil {
+	if q, e = normalizeExport(q, r); e != nil {
 		failure(c, 400, e)
 		return
 	}
@@ -362,7 +375,8 @@ func (a *App) systemInfo(c *gin.Context) {
 		msg = e.Error()
 	}
 	network, _ := a.Run.Run(c.Request.Context(), "ip", "-j", "address")
-	c.JSON(200, gin.H{"version": Version, "hostname": host, "uptime": string(uptime), "zfs_version": version, "zfs_error": msg, "network": network, "pool": a.Config.Pool, "timezone": time.Local.String(), "secure_cookie": a.Config.SecureCookie, "external_url": a.Config.ExternalURL})
+	disks, diskError := a.disks(c.Request.Context())
+	c.JSON(200, gin.H{"disks": disks, "disk_error": diskError, "version": Version, "hostname": host, "uptime": string(uptime), "zfs_version": version, "zfs_error": msg, "network": network, "pool": a.Config.Pool, "timezone": time.Local.String(), "secure_cookie": a.Config.SecureCookie, "external_url": a.Config.ExternalURL})
 }
 func (a *App) exportConfig(c *gin.Context) {
 	var repos []Repository

@@ -160,7 +160,7 @@ export default function Overview({
             提供磁盘冗余，异地副本提供设备故障后的恢复能力。
           </p>
         </div>
-        <a href="#restore">开始恢复验证 →</a>
+        <a href="#snapshots">查看快照与创建仓库 →</a>
       </div>
     </>
   );

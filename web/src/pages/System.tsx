@@ -1,33 +1,10 @@
-import React, { useState } from "react";
-import {
-  Alert,
-  Button,
-  Message,
-  Modal,
-  Select,
-  Tag,
-} from "@arco-design/web-react";
-import {
-  IconDashboard,
-  IconStorage,
-  IconSync,
-  IconNotification,
-  IconCheckCircle,
-  IconSafe,
-  IconCamera,
-  IconPlus,
-  IconHistory,
-} from "@arco-design/web-react/icon";
+import { actionLabel, auditDetail } from "../types";
+import React from "react";
+import { Button, Message, Modal, Tag } from "@arco-design/web-react";
+import { IconPlus } from "@arco-design/web-react/icon";
 import { api, bytes, date, useAuth } from "../api";
-import {
-  Chart,
-  DataTable,
-  ErrorBox,
-  jobColumns,
-  Row,
-  useData,
-} from "../components";
-import { Tools, repoOptions, kindLabels } from "../types";
+import { DataTable, ErrorBox, Row, useData } from "../components";
+import { Tools } from "../types";
 export default function System({
   rev,
   admin,
@@ -61,7 +38,7 @@ export default function System({
           type: "select",
           value: u?.role || "operator",
           options: [
-            { label: "操作员 · 查看、快照与克隆恢复", value: "operator" },
+            { label: "操作员 · 查看、快照与创建快照仓库", value: "operator" },
             { label: "管理员 · 完整管理权限", value: "admin" },
           ],
         },
@@ -81,6 +58,67 @@ export default function System({
   }
   return (
     <>
+      <section>
+        <div className="section-title">
+          <h2>磁盘信息</h2>
+          <span className="muted">服务器物理设备与备份池成员状态</span>
+        </div>
+        <ErrorBox error={info.data?.disk_error} />
+        <DataTable
+          rows={info.data?.disks || null}
+          rowKey="name"
+          columns={[
+            {
+              title: "设备 / 用途",
+              render: (_: any, d: Row) => (
+                <span>
+                  {d.name}
+                  <small className="cell-sub">{d.role}</small>
+                </span>
+              ),
+            },
+            {
+              title: "型号 / 序列号",
+              render: (_: any, d: Row) => (
+                <span>
+                  {d.model || "—"}
+                  <small className="cell-sub">{d.serial || "—"}</small>
+                </span>
+              ),
+            },
+            { title: "容量", dataIndex: "size", render: bytes },
+            {
+              title: "介质 / 接口",
+              render: (_: any, d: Row) =>
+                `${d.media} · ${d.transport || "未报告"}`,
+            },
+            {
+              title: "挂载点",
+              render: (_: any, d: Row) => d.mountpoints.join("、") || "—",
+            },
+            {
+              title: "备份池状态",
+              render: (_: any, d: Row) =>
+                d.pool_state ? (
+                  <Tag color={d.pool_state === "ONLINE" ? "green" : "red"}>
+                    {(
+                      {
+                        ONLINE: "在线",
+                        DEGRADED: "降级",
+                        FAULTED: "故障",
+                        OFFLINE: "离线",
+                        UNAVAIL: "不可用",
+                        REMOVED: "已移除",
+                      } as Row
+                    )[d.pool_state] || d.pool_state}
+                  </Tag>
+                ) : (
+                  "非池成员"
+                ),
+            },
+          ]}
+        />
+      </section>
       <section>
         <div className="section-title">
           <h2>设备信息</h2>
@@ -310,12 +348,20 @@ export default function System({
                 {
                   title: "操作人",
                   dataIndex: "username",
-                  render: (v: string, r: Row) => v || `用户 #${r.user_id}`,
+                  render: (v: string, r: Row) =>
+                    v ||
+                    (r.user_id === 0 ? "系统自动任务" : `用户 #${r.user_id}`),
                 },
-                { title: "操作", dataIndex: "action" },
+                {
+                  title: "操作",
+                  dataIndex: "action",
+                  render: (v: string) => (
+                    <span title={v}>{actionLabel(v)}</span>
+                  ),
+                },
                 { title: "目标", dataIndex: "target" },
                 { title: "来源 IP", dataIndex: "ip" },
-                { title: "详情", dataIndex: "detail" },
+                { title: "详情", dataIndex: "detail", render: auditDetail },
               ]}
             />
           </section>

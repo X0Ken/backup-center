@@ -167,7 +167,7 @@ def main():
         if current['status'] in ('failed', 'succeeded'):break
         time.sleep(.5)
     assert current['status'] == 'succeeded', current
-    policy = {'repository_id': repo['id'], 'cron': '0 2 * * *', 'enabled': False, 'keep_hourly': 1, 'keep_daily': 1, 'keep_weekly': 1, 'keep_monthly': 1, 'keep_yearly': 1, 'recursive': False}
+    policy = {'repository_id': repo['id'], 'enabled': False, 'keep_hourly': 1, 'keep_daily': 1, 'keep_weekly': 1, 'keep_monthly': 1, 'keep_yearly': 1, 'recursive': False}
     request('/policies', 'PUT', policy)
     preview = request(f"/policies/{repo['id']}/preview")
     assert preview['keep'][second]

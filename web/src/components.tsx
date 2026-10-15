@@ -22,6 +22,7 @@ import {
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import { api, bytes, date } from "./api";
+import { actionLabel } from "./types";
 echarts.use([
   LineChart,
   GridComponent,
@@ -37,9 +38,11 @@ export type Field = {
   type?: "select" | "number" | "switch" | "password" | "textarea";
   options?: { label: string; value: any }[];
   required?: boolean;
-  help?: string;
+  help?: string | ((values: Row) => string);
   min?: number;
   max?: number;
+  visible?: (values: Row) => boolean;
+  disabled?: boolean;
 };
 export function FormDialog({
   title,
@@ -55,6 +58,11 @@ export function FormDialog({
   warning?: string;
 }) {
   const [form] = Form.useForm();
+  const initial = Object.fromEntries(
+    fields.map((f) => [f.key, f.value ?? (f.type === "switch" ? false : "")]),
+  );
+  const [values, setValues] = useState<Row>(initial);
+  const visibleFields = fields.filter((f) => !f.visible || f.visible(values));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   return (
@@ -63,7 +71,21 @@ export function FormDialog({
       visible
       onCancel={() => !busy && onClose()}
       confirmLoading={busy}
-      okText="确认执行"
+      okText={
+        title.startsWith("删除")
+          ? "确认删除"
+          : /创建|新建/.test(title)
+            ? "创建"
+            : title.includes("清理")
+              ? "开始清理"
+              : title.includes("对比")
+                ? "对比"
+                : title.includes("下载")
+                  ? "下载"
+                  : title.includes("信任")
+                    ? "信任主机"
+                    : "保存"
+      }
       cancelText="取消"
       style={{ width: 620 }}
       onOk={async () => {
@@ -71,7 +93,11 @@ export function FormDialog({
           const values = await form.validate();
           setBusy(true);
           setError("");
-          await onSubmit(values);
+          await onSubmit(
+            Object.fromEntries(
+              visibleFields.map((f) => [f.key, values[f.key]]),
+            ),
+          );
           onClose();
         } catch (e: any) {
           setError(e.message || "请检查表单");
@@ -89,19 +115,15 @@ export function FormDialog({
       <Form
         form={form}
         layout="vertical"
-        initialValues={Object.fromEntries(
-          fields.map((f) => [
-            f.key,
-            f.value ?? (f.type === "switch" ? false : ""),
-          ]),
-        )}
+        initialValues={initial}
+        onValuesChange={(_, all) => setValues(all)}
       >
-        {fields.map((f) => (
+        {visibleFields.map((f) => (
           <Form.Item
             key={f.key}
             field={f.key}
             label={f.label}
-            extra={f.help}
+            extra={typeof f.help === "function" ? f.help(values) : f.help}
             rules={
               f.required
                 ? [{ required: true, message: `请填写${f.label}` }]
@@ -110,11 +132,15 @@ export function FormDialog({
             triggerPropName={f.type === "switch" ? "checked" : "value"}
           >
             {f.type === "select" ? (
-              <Select options={f.options} />
+              <Select
+                aria-label={f.label}
+                options={f.options}
+                disabled={f.disabled}
+              />
             ) : f.type === "number" ? (
               <InputNumber min={f.min ?? 0} max={f.max ?? 10000} />
             ) : f.type === "switch" ? (
-              <Switch />
+              <Switch aria-label={f.label} />
             ) : f.type === "password" ? (
               <Input.Password autoComplete="new-password" />
             ) : f.type === "textarea" ? (
@@ -260,7 +286,7 @@ export function JobNotice({ job }: { job: any }) {
   return <span>任务 #{job.id} 已加入队列，可在任务中心查看结果。</span>;
 }
 export const jobColumns = [
-  { title: "任务", dataIndex: "kind" },
+  { title: "任务", dataIndex: "kind", render: actionLabel },
   { title: "目标", dataIndex: "target" },
   {
     title: "状态",
@@ -291,7 +317,7 @@ export function Browser({
     <Modal
       visible
       footer={null}
-      title="快照文件恢复"
+      title="浏览快照文件"
       onCancel={onClose}
       style={{ width: 900 }}
     >

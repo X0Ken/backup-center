@@ -334,7 +334,7 @@ func (a *App) action(ctx context.Context, kind string, q ActionRequest) (string,
 		var n int64
 		a.DB.Model(&Export{}).Where("repository_id = ? AND enabled = ?", r.ID, true).Count(&n)
 		if n > 0 {
-			return "", errors.New("先关闭此仓库的协议导出")
+			return "", errors.New("先关闭此仓库的共享访问")
 		}
 		ss, e := a.snapshots(ctx, r)
 		if e != nil {
@@ -405,7 +405,7 @@ func (a *App) action(ctx context.Context, kind string, q ActionRequest) (string,
 		var n int64
 		a.DB.Model(&Export{}).Where("repository_id = ? AND enabled = ?", r.ID, true).Count(&n)
 		if n > 0 {
-			return "", errors.New("回滚前必须关闭协议导出")
+			return "", errors.New("回滚前必须关闭共享访问")
 		}
 		_, err = a.zfs(ctx, "rollback", q.Snapshot)
 	default:

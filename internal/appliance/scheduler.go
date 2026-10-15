@@ -12,9 +12,6 @@ import (
 )
 
 func validatePolicy(p Policy) error {
-	if _, e := cron.ParseStandard(p.Cron); e != nil {
-		return fmt.Errorf("Cron 表达式无效: %w", e)
-	}
 	n := []int{p.KeepHourly, p.KeepDaily, p.KeepWeekly, p.KeepMonthly, p.KeepYearly}
 	total := 0
 	for _, x := range n {
@@ -53,7 +50,7 @@ func retentionKeepOne(ss []Snapshot, p Policy) map[string]bool {
 	if len(ss) > 0 {
 		keep[ss[0].Name] = true
 	}
-	formats := []string{"2006-01-02T15", "2006-01-02", "week", "2006-01", "2006"}
+	formats := []string{"2006-01-02T15-0700", "2006-01-02", "week", "2006-01", "2006"}
 	counts := []int{p.KeepHourly, p.KeepDaily, p.KeepWeekly, p.KeepMonthly, p.KeepYearly}
 	for i, f := range formats {
 		seen := map[string]bool{}
@@ -61,7 +58,7 @@ func retentionKeepOne(ss []Snapshot, p Policy) map[string]bool {
 			if !s.Managed {
 				continue
 			}
-			t := s.CreatedAt.UTC()
+			t := s.CreatedAt.In(time.Local)
 			key := t.Format(f)
 			if f == "week" {
 				y, w := t.ISOWeek()
@@ -123,30 +120,148 @@ func (a *App) prune(ctx context.Context, id uint) (string, error) {
 	}
 	return fmt.Sprintf("删除 %d 个过期快照", n), nil
 }
+
+// policyCron derives the calendar cadence from the finest retained tier.
+func policyCron(p Policy) string {
+	switch {
+	case p.KeepHourly > 0:
+		return "0 * * * *"
+	case p.KeepDaily > 0:
+		return "0 0 * * *"
+	case p.KeepWeekly > 0:
+		return "0 0 * * 1"
+	case p.KeepMonthly > 0:
+		return "0 0 1 * *"
+	default:
+		return "0 0 1 1 *"
+	}
+}
+func policyPeriod(p Policy, t time.Time) string {
+	t = t.In(time.Local)
+	switch {
+	case p.KeepHourly > 0:
+		return t.Format("2006-01-02T15-0700")
+	case p.KeepDaily > 0:
+		return t.Format("2006-01-02")
+	case p.KeepWeekly > 0:
+		y, w := t.ISOWeek()
+		return fmt.Sprintf("%d-W%02d", y, w)
+	case p.KeepMonthly > 0:
+		return t.Format("2006-01")
+	default:
+		return t.Format("2006")
+	}
+}
+func policyView(p Policy) map[string]any {
+	b := map[string]any{"id": p.ID, "repository_id": p.RepositoryID, "enabled": p.Enabled,
+		"keep_hourly": p.KeepHourly, "keep_daily": p.KeepDaily, "keep_weekly": p.KeepWeekly,
+		"keep_monthly": p.KeepMonthly, "keep_yearly": p.KeepYearly, "recursive": p.Recursive,
+		"timezone": time.Local.String()}
+	labels := map[string]string{"0 * * * *": "每小时整点", "0 0 * * *": "每天零点", "0 0 * * 1": "每周一零点", "0 0 1 * *": "每月 1 日零点", "0 0 1 1 *": "每年 1 月 1 日零点"}
+	b["schedule_label"] = labels[policyCron(p)]
+	if p.Enabled {
+		if schedule, err := cron.ParseStandard(policyCron(p)); err == nil {
+			b["next_run_at"] = schedule.Next(time.Now())
+		}
+	}
+	return b
+}
+func (a *App) signalPolicies() {
+	select {
+	case a.policyWake <- struct{}{}:
+	default:
+	}
+}
+func (a *App) policyScheduler() {
+	defer a.wg.Done()
+	a.reconcilePolicies()
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-a.policyWake:
+			a.reconcilePolicies()
+		}
+	}
+}
+func policyPeriodProtected(ss []Snapshot, r Repository, p Policy, now time.Time) bool {
+	for _, s := range ss {
+		if s.Managed && strings.SplitN(s.Name, "@", 2)[0] == r.Dataset && policyPeriod(p, s.CreatedAt) == policyPeriod(p, now) {
+			return true
+		}
+	}
+	return false
+}
+func (a *App) reconcilePolicies() {
+	var policies []Policy
+	if err := a.DB.Where("enabled = ?", true).Find(&policies).Error; err != nil {
+		return
+	}
+	for _, p := range policies {
+		if a.ctx.Err() != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+		err := a.ensurePolicyPeriod(ctx, p, time.Now())
+		cancel()
+		if err != nil {
+			a.raise("schedule-"+strconv.Itoa(int(p.ID)), "warning", err.Error())
+		}
+	}
+}
+func (a *App) ensurePolicyPeriod(ctx context.Context, p Policy, now time.Time) error {
+	if !p.Enabled {
+		return nil
+	}
+	if err := validatePolicy(p); err != nil {
+		return err
+	}
+	r, err := a.repo(p.RepositoryID)
+	if err != nil {
+		return err
+	}
+	ss, err := a.snapshots(ctx, r)
+	if err != nil {
+		return err
+	}
+	if policyPeriodProtected(ss, r, p, now) {
+		return nil
+	}
+	var pending int64
+	if err := a.DB.Model(&Job{}).Where("kind = ? AND target = ? AND status IN ?", "snapshot.scheduled", strconv.Itoa(int(p.RepositoryID)), []string{"queued", "running"}).Count(&pending).Error; err != nil {
+		return err
+	}
+	if pending > 0 {
+		return nil
+	}
+	_, err = a.enqueue("snapshot.scheduled", strconv.Itoa(int(p.RepositoryID)), ActionRequest{RepositoryID: p.RepositoryID, Recursive: p.Recursive}, 0)
+	return err
+}
 func (a *App) reloadSchedules() error {
 	a.scheduleMu.Lock()
 	defer a.scheduleMu.Unlock()
 	for _, entry := range a.cron.Entries() {
 		a.cron.Remove(entry.ID)
 	}
+	// Normalize legacy schedules: retention tiers are the sole source of cadence.
 	var policies []Policy
-	if e := a.DB.Where("enabled = ?", true).Find(&policies).Error; e != nil {
-		return e
+	if err := a.DB.Find(&policies).Error; err != nil {
+		return err
 	}
 	for _, p := range policies {
-		p := p
 		if err := validatePolicy(p); err != nil {
 			return err
 		}
-		_, e := a.cron.AddFunc(p.Cron, func() {
-			_, err := a.enqueue("snapshot.scheduled", strconv.Itoa(int(p.RepositoryID)), ActionRequest{RepositoryID: p.RepositoryID, Recursive: p.Recursive}, 0)
-			if err != nil {
-				a.raise("schedule-"+strconv.Itoa(int(p.ID)), "warning", err.Error())
+		if p.Cron != policyCron(p) {
+			if err := a.DB.Model(&p).UpdateColumn("cron", policyCron(p)).Error; err != nil {
+				return err
 			}
-		})
-		if e != nil {
-			return e
 		}
+	}
+	// Reconcile each minute so startup, downtime and failed attempts cannot leave
+	// the current calendar period unprotected. enqueue deduplicates active work.
+	if _, err := a.cron.AddFunc("* * * * *", a.signalPolicies); err != nil {
+		return err
 	}
 	var reps []Replication
 	if e := a.DB.Where("enabled = ? AND cron <> ?", true, "").Find(&reps).Error; e != nil {
@@ -206,6 +321,27 @@ func (a *App) execute(j Job) (string, error) {
 		if err := jsonDecode(j.Payload, &q); err != nil {
 			return "", err
 		}
+		if j.Kind == "snapshot.scheduled" {
+			var p Policy
+			if err := a.DB.First(&p, "repository_id = ?", q.RepositoryID).Error; err != nil {
+				return "策略已删除，跳过自动快照", nil
+			}
+			if !p.Enabled {
+				return "策略已暂停，跳过自动快照", nil
+			}
+			r, err := a.repo(p.RepositoryID)
+			if err != nil {
+				return "", err
+			}
+			ss, err := a.snapshots(ctx, r)
+			if err != nil {
+				return "", err
+			}
+			if policyPeriodProtected(ss, r, p, time.Now()) {
+				return a.prune(ctx, q.RepositoryID)
+			}
+			q.Recursive = p.Recursive
+		}
 		s, err := a.createSnapshot(ctx, q)
 		if err == nil && j.Kind == "snapshot.scheduled" {
 			_, err = a.prune(ctx, q.RepositoryID)
@@ -228,7 +364,7 @@ func (a *App) execute(j Job) (string, error) {
 		if err := jsonDecode(j.Payload, &q); err != nil {
 			return "", err
 		}
-		return "协议配置已应用", a.applyExport(ctx, q)
+		return "共享访问设置已应用", a.applyExport(ctx, q)
 	case "replicate":
 		var id uint
 		if err := jsonDecode(j.Payload, &id); err != nil {
@@ -261,7 +397,7 @@ func (a *App) execute(j Job) (string, error) {
 		var n int64
 		a.DB.Model(&Export{}).Where("repository_id = ? AND enabled = ?", id, true).Count(&n)
 		if n > 0 {
-			return "", errors.New("先关闭协议导出")
+			return "", errors.New("先关闭共享访问")
 		}
 		if r.Kind == "filesystem" {
 			if _, err = a.zfs(ctx, "unmount", r.Dataset); err != nil {

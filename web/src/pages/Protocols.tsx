@@ -1,34 +1,10 @@
 import { showClientGuide } from "../ClientGuide";
-import React, { useState } from "react";
-import {
-  Alert,
-  Button,
-  Message,
-  Modal,
-  Select,
-  Tag,
-} from "@arco-design/web-react";
-import {
-  IconDashboard,
-  IconStorage,
-  IconSync,
-  IconNotification,
-  IconCheckCircle,
-  IconSafe,
-  IconCamera,
-  IconPlus,
-  IconHistory,
-} from "@arco-design/web-react/icon";
-import { api, bytes, date, useAuth } from "../api";
-import {
-  Chart,
-  DataTable,
-  ErrorBox,
-  jobColumns,
-  Row,
-  useData,
-} from "../components";
-import { Tools, repoOptions, kindLabels } from "../types";
+import React from "react";
+import { Button, Message, Tag } from "@arco-design/web-react";
+import { IconPlus } from "@arco-design/web-react/icon";
+import { api } from "../api";
+import { DataTable, ErrorBox, Row, useData } from "../components";
+import { Tools } from "../types";
 export default function Protocols({
   rev,
   repos,
@@ -39,78 +15,89 @@ export default function Protocols({
 }: Omit<Tools, "perform">) {
   const data = useData<Row[]>("/exports", rev);
   const connections = useData("/connections", rev);
+  const available =
+    repos?.filter(
+      (r) => !data.data?.some((e) => e.repository_id === r.repository.id),
+    ) || [];
   function configure(row?: Row) {
+    const kind = (v: Row) =>
+      repos?.find((r) => r.repository.id === v.repository_id)?.repository.kind;
+    const nfs = (v: Row) => kind(v) === "filesystem";
+    const iscsi = (v: Row) => kind(v) === "volume";
     form(
-      "配置协议导出",
+      row ? "修改访问设置" : "添加访问方式",
       [
         {
           key: "repository_id",
           label: "仓库",
           type: "select",
-          options: repoOptions(repos),
-          value: row?.repository_id,
           required: true,
-        },
-        {
-          key: "protocol",
-          label: "访问协议",
-          type: "select",
-          value: row?.protocol || "nfs",
-          options: [
-            { label: "NFS · 文件仓库", value: "nfs" },
-            { label: "iSCSI · 块卷仓库", value: "iscsi" },
-          ],
+          disabled: !!row,
+          value: row?.repository_id,
+          options: (row ? repos || [] : available).map((r) => ({
+            value: r.repository.id,
+            label: `${r.repository.name} · ${r.repository.kind === "volume" ? "iSCSI" : "NFS"}`,
+          })),
+          help: "访问方式由仓库类型决定：文件仓库使用 NFS，块卷仓库使用 iSCSI。",
         },
         {
           key: "clients",
-          label: "NFS 客户端 IP / CIDR",
+          label: "允许访问的客户端 IP / CIDR",
           value: row?.clients || "",
-          help: "以空格分隔，例如 192.0.2.0/24。不允许通配符。",
+          required: true,
+          visible: nfs,
+          help: "多个地址以空格分隔，例如 192.0.2.0/24。不允许通配符。",
         },
         {
           key: "read_only",
-          label: "NFS 只读访问",
+          label: "只读访问",
           type: "switch",
           value: row?.read_only || false,
+          visible: nfs,
+          help: "NFS 使用同步写入和 root_squash。查看快照内容时建议启用只读。",
         },
         {
           key: "iqn",
-          label: "iSCSI Target IQN",
-          value: row?.iqn || "iqn.2026-10.local.backup:repository",
+          label: "目标端 IQN（可选）",
+          value: row?.iqn || "",
+          visible: iscsi,
+          help: "留空按仓库名称自动生成；访问启用后不能修改。",
         },
         {
           key: "initiators",
-          label: "iSCSI Initiator IQN 白名单",
+          label: "允许访问的客户端 IQN",
           type: "textarea",
+          required: true,
           value: row?.initiators || "",
-          help: "以空格分隔；仅白名单主机可连接。",
+          visible: iscsi,
+          help: "多个 IQN 以空格分隔。请使用隔离的存储网络；同一普通文件系统只允许一个写入端。",
         },
         {
           key: "enabled",
-          label: "启用导出",
+          label: "启用访问",
           type: "switch",
           value: row?.enabled ?? true,
         },
       ],
       async (v) => {
         const j = await api("/exports", "PUT", v);
-        Message.success(`配置任务 #${j.id} 已提交`);
+        Message.success(`访问设置任务 #${j.id} 已提交`);
         refresh();
       },
-      "NFS 使用同步写入和 root_squash。iSCSI 应运行于隔离的存储网络，同一普通文件系统只能有一个写入端。",
     );
   }
   return (
     <>
       <div className="section-toolbar">
-        <span>NFS 与 iSCSI 访问控制</span>
+        <span>仓库访问方式与客户端权限</span>
         {admin && (
           <Button
             type="primary"
             icon={<IconPlus />}
+            disabled={available.length === 0}
             onClick={() => configure()}
           >
-            配置导出
+            添加访问方式
           </Button>
         )}
       </div>
@@ -125,7 +112,7 @@ export default function Protocols({
               repos?.find((r) => r.repository.id === v)?.repository.name || v,
           },
           {
-            title: "协议",
+            title: "访问方式",
             dataIndex: "protocol",
             render: (v: string) => (
               <Tag color="arcoblue">{v.toUpperCase()}</Tag>
@@ -150,7 +137,7 @@ export default function Protocols({
               <div className="row-actions">
                 {admin && (
                   <Button type="text" onClick={() => configure(r)}>
-                    配置
+                    修改访问设置
                   </Button>
                 )}
                 <Button
@@ -165,20 +152,24 @@ export default function Protocols({
         ]}
       />
       <div className="two-cols">
-        <section>
-          <h2>NFS 客户端</h2>
-          <pre className="code-block">
-            {connections.data?.nfs || "当前无已登记客户端"}
-          </pre>
-        </section>
-        <section>
-          <h2>iSCSI 会话</h2>
-          <pre className="code-block">
-            {connections.data?.iscsi ||
-              connections.data?.iscsi_error ||
-              "当前无会话"}
-          </pre>
-        </section>
+        {data.data?.some((e) => e.protocol === "nfs") && (
+          <section>
+            <h2>NFS 客户端</h2>
+            <pre className="code-block">
+              {connections.data?.nfs || "当前无已登记客户端"}
+            </pre>
+          </section>
+        )}
+        {data.data?.some((e) => e.protocol === "iscsi") && (
+          <section>
+            <h2>iSCSI 会话</h2>
+            <pre className="code-block">
+              {connections.data?.iscsi ||
+                connections.data?.iscsi_error ||
+                "当前无会话"}
+            </pre>
+          </section>
+        )}
       </div>
     </>
   );

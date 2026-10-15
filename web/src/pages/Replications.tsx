@@ -40,16 +40,6 @@ export default function Replications({
   const reps = useData<Row[]>("/replications", rev);
   return (
     <>
-      <div className="guidance">
-        <IconSync />
-        <div>
-          <strong>为设备级故障保留独立副本</strong>
-          <p>
-            使用 SSH 加密传输、严格主机验证、自动增量和中断续传。接收端快照 GUID
-            校验成功后，才推进复制基线。
-          </p>
-        </div>
-      </div>
       <div className="section-toolbar">
         <span>异地复制任务</span>
         {admin && (

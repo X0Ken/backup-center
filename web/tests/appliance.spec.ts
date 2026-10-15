@@ -12,7 +12,9 @@ test("HTTPS login, all workspaces, real UI repository creation and snapshot", as
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
-  await page.getByLabel("用户名", { exact: true }).fill("admin");
+  await page
+    .getByLabel("用户名", { exact: true })
+    .fill(process.env.BC_TEST_USER || "admin");
   await page
     .getByLabel("密码", { exact: true })
     .fill(readFileSync(passwordFile!, "utf8").trim());
@@ -22,9 +24,9 @@ test("HTTPS login, all workspaces, real UI repository creation and snapshot", as
   ).toBeVisible();
   for (const label of [
     "备份仓库",
-    "快照与策略",
-    "访问协议",
-    "数据恢复",
+    "快照",
+    "共享访问",
+    "快照策略",
     "异地复制",
     "监控告警",
     "任务中心",
@@ -52,7 +54,7 @@ test("HTTPS login, all workspaces, real UI repository creation and snapshot", as
     await page.getByRole("button", { name: "创建仓库", exact: true }).click();
     await page.getByLabel("仓库名称", { exact: true }).fill(name);
     await page.getByLabel("容量配额", { exact: true }).fill("1G");
-    await page.getByRole("button", { name: "确认执行", exact: true }).click();
+    await page.getByRole("button", { name: "创建", exact: true }).click();
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible({
       timeout: 30000,
     });
@@ -62,7 +64,7 @@ test("HTTPS login, all workspaces, real UI repository creation and snapshot", as
     await row.getByRole("button", { name: "创建快照", exact: true }).click();
     await page
       .locator("nav")
-      .getByRole("link", { name: "快照与策略", exact: true })
+      .getByRole("link", { name: "快照", exact: true })
       .click();
     await expect(page.getByText(new RegExp(name + "@bc-")).first()).toBeVisible(
       { timeout: 30000 },

@@ -74,7 +74,7 @@ func TestRepositoryOwnership(t *testing.T) {
 	}
 }
 func TestRetentionCalendarAndProtectedPoints(t *testing.T) {
-	now := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 10, 15, 9, 0, 0, 0, time.Local)
 	ss := []Snapshot{}
 	for i := 0; i < 80; i++ {
 		ss = append(ss, Snapshot{Name: fmt.Sprintf("tank/repo@bc-%03d", i), CreatedAt: now.Add(-time.Duration(i) * time.Hour), Managed: true, Clones: "-"})
@@ -475,5 +475,110 @@ func TestGracefulShutdownMarksJobInterrupted(t *testing.T) {
 	b.DB.First(&job, j.ID)
 	if job.Status != "interrupted" {
 		t.Fatal(job.Status, job.Error)
+	}
+}
+
+func TestPolicyCadenceFromRetention(t *testing.T) {
+	cases := []struct {
+		p    Policy
+		cron string
+	}{
+		{Policy{KeepHourly: 24, KeepDaily: 30}, "0 * * * *"},
+		{Policy{KeepDaily: 30, KeepWeekly: 12}, "0 0 * * *"},
+		{Policy{KeepWeekly: 12, KeepMonthly: 12}, "0 0 * * 1"},
+		{Policy{KeepMonthly: 12, KeepYearly: 3}, "0 0 1 * *"},
+		{Policy{KeepYearly: 3}, "0 0 1 1 *"},
+	}
+	for _, c := range cases {
+		c.p.Cron = "invalid legacy schedule"
+		if err := validatePolicy(c.p); err != nil {
+			t.Fatal(err)
+		}
+		if got := policyCron(c.p); got != c.cron {
+			t.Fatalf("got %s, want %s", got, c.cron)
+		}
+	}
+	if validatePolicy(Policy{}) == nil || validatePolicy(Policy{KeepDaily: -1}) == nil {
+		t.Fatal("invalid retention accepted")
+	}
+	p := Policy{KeepWeekly: 2}
+	if policyPeriod(p, time.Date(2026, 12, 31, 12, 0, 0, 0, time.Local)) != policyPeriod(p, time.Date(2027, 1, 1, 12, 0, 0, 0, time.Local)) {
+		t.Fatal("ISO week crosses year incorrectly")
+	}
+}
+func TestAutomaticPolicyCatchupAndPause(t *testing.T) {
+	now := time.Now()
+	repo := Repository{Name: "auto", Dataset: "tank/backup-center/repos/auto", Kind: "filesystem"}
+	output := ""
+	r := &fakeRunner{fn: func(_ string, args []string) (string, error) { return output, nil }}
+	a := testApp(t, r)
+	if err := a.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	p := Policy{RepositoryID: repo.ID, Enabled: true, KeepDaily: 3, Cron: "* * * * *"}
+	if err := a.DB.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reloadSchedules(); err != nil {
+		t.Fatal(err)
+	}
+	a.DB.First(&p, p.ID)
+	if p.Cron != "0 0 * * *" {
+		t.Fatal("legacy cron not normalized")
+	}
+	output = fmt.Sprintf("%s@bc-present\t%d\t0\t0\t-\t0\t1\n", repo.Dataset, now.Unix())
+	if err := a.ensurePolicyPeriod(context.Background(), p, now); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	a.DB.Model(&Job{}).Count(&count)
+	if count != 0 {
+		t.Fatal("duplicate snapshot in protected period")
+	}
+	output = ""
+	if err := a.ensurePolicyPeriod(context.Background(), p, now); err != nil {
+		t.Fatal(err)
+	}
+	a.DB.Model(&Job{}).Count(&count)
+	if count != 1 {
+		t.Fatal("missing catch-up snapshot")
+	}
+	a.DB.Model(&p).Update("enabled", false)
+	var j Job
+	a.DB.First(&j)
+	if _, err := a.execute(j); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range r.calls {
+		if len(call) > 1 && call[1] == "snapshot" {
+			t.Fatal("paused policy created snapshot")
+		}
+	}
+}
+func TestRepositoryDeterminesAccessProtocol(t *testing.T) {
+	fs := Repository{Name: "files", Kind: "filesystem"}
+	e, err := normalizeExport(Export{Clients: "198.51.100.0/24", IQN: "irrelevant"}, fs)
+	if err != nil || e.Protocol != "nfs" || e.IQN != "" {
+		t.Fatalf("NFS inference failed: %+v %v", e, err)
+	}
+	if _, err := normalizeExport(Export{Protocol: "iscsi"}, fs); err == nil {
+		t.Fatal("protocol override accepted")
+	}
+	e, err = normalizeExport(Export{Initiators: "iqn.2026-10.local.client:one", Clients: "irrelevant", ReadOnly: true}, Repository{Name: "mysql", Kind: "volume"})
+	if err != nil || e.Protocol != "iscsi" || e.IQN != "iqn.2026-10.local.backup-center:repo-0-mysql" || e.Clients != "" || e.ReadOnly {
+		t.Fatalf("iSCSI inference failed: %+v %v", e, err)
+	}
+}
+func TestPhysicalDiskInventory(t *testing.T) {
+	raw := `{"blockdevices":[{"name":"/dev/sda","type":"disk","size":480103981056,"model":"SAMSUNG","serial":"system","tran":"sata","rota":false,"children":[{"name":"/dev/sda1","mountpoints":["/"]}]},{"name":"/dev/zd0","type":"disk","size":100},{"name":"/dev/nvme0n1","type":"disk","size":3200000000000,"model":"INTEL","tran":"nvme","rota":false,"mountpoints":[null],"children":[{"name":"/dev/nvme0n1p1","mountpoints":[null]}]}]}`
+	disks, err := parseDisks(raw, "\t/dev/nvme0n1p1 ONLINE 0 0 0\n")
+	if err != nil || len(disks) != 2 {
+		t.Fatalf("unexpected inventory %+v %v", disks, err)
+	}
+	if disks[0].Role != "系统盘" || disks[1].PoolState != "ONLINE" || disks[1].Role != "备份数据盘" {
+		t.Fatalf("incorrect disk roles: %+v", disks)
+	}
+	if _, err := parseDisks("bad json", ""); err == nil {
+		t.Fatal("invalid inventory silently accepted")
 	}
 }

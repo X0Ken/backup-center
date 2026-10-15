@@ -28,6 +28,7 @@ type App struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
+	policyWake chan struct{}
 	cron       *cron.Cron
 	scheduleMu sync.Mutex
 	mutationMu sync.Mutex
@@ -77,7 +78,7 @@ func Open(cfg Config, runner Runner) (*App, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{DB: db, Run: runner, Config: cfg, root: cfg.Pool + "/backup-center", ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), lock: lock, attempts: map[string][]time.Time{}}
+	a := &App{DB: db, Run: runner, Config: cfg, root: cfg.Pool + "/backup-center", ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), policyWake: make(chan struct{}, 1), lock: lock, attempts: map[string][]time.Time{}}
 	a.cron = cron.New(cron.WithLocation(time.Local), cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger), cron.Recover(cron.DefaultLogger)))
 	return a, nil
 }
@@ -86,9 +87,10 @@ func (a *App) Start() error {
 		return err
 	}
 	a.cron.Start()
-	a.wg.Add(2)
+	a.wg.Add(3)
 	go a.worker()
 	go a.monitor()
+	go a.policyScheduler()
 	a.signal()
 	return nil
 }

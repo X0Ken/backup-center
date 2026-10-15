@@ -50,7 +50,16 @@ export default function Repositories({
                     key: "quota",
                     label: "容量配额",
                     value: "100G",
-                    help: "例如 100G、1T；块卷仓库同时作为卷大小。",
+                    help: "例如 100G、1T。",
+                    visible: (v) => v.kind === "filesystem",
+                  },
+                  {
+                    key: "volume_size",
+                    label: "卷容量",
+                    value: "100G",
+                    required: true,
+                    help: "例如 100G、1T。",
+                    visible: (v) => v.kind === "volume",
                   },
                   {
                     key: "compression",
@@ -65,6 +74,7 @@ export default function Repositories({
                   {
                     key: "recordsize",
                     label: "文件记录大小",
+                    visible: (v) => v.kind === "filesystem",
                     type: "select",
                     value: "128K",
                     options: [
@@ -89,12 +99,13 @@ export default function Repositories({
                     name: v.name,
                     kind: v.kind,
                     description: v.description,
-                    volume_size: v.quota,
+                    volume_size: v.volume_size,
                     encrypted: v.encrypted,
                     properties: {
-                      quota: v.quota,
                       compression: v.compression,
-                      recordsize: v.recordsize,
+                      ...(v.kind === "filesystem"
+                        ? { quota: v.quota, recordsize: v.recordsize }
+                        : {}),
                     },
                   });
                   Message.success(`创建任务 #${j.id} 已提交`);
@@ -144,7 +155,9 @@ export default function Repositories({
                 {r.storage.compression} ·{" "}
                 {r.storage.encryption === "off"
                   ? "未加密"
-                  : r.storage.key_status}
+                  : r.storage.key_status === "available"
+                    ? "密钥已加载"
+                    : "密钥未加载"}
               </span>
             ),
           },
@@ -178,7 +191,7 @@ export default function Repositories({
                   type="text"
                   onClick={() => showClientGuide(r.repository.id)}
                 >
-                  连接指南
+                  接入指南
                 </Button>
                 {admin && (
                   <>
@@ -191,6 +204,7 @@ export default function Repositories({
                             {
                               key: "quota",
                               label: "容量配额",
+                              visible: () => r.repository.kind === "filesystem",
                               value:
                                 r.storage.quota === "0"
                                   ? "none"

@@ -10,6 +10,30 @@ import (
 	"strings"
 )
 
+// Access protocol belongs to the repository type, never to user selection.
+func normalizeExport(e Export, r Repository) (Export, error) {
+	protocol := "nfs"
+	if r.Kind == "volume" {
+		protocol = "iscsi"
+	} else if r.Kind != "filesystem" {
+		return e, errors.New("不支持的仓库类型")
+	}
+	if e.Protocol != "" && e.Protocol != protocol {
+		return e, errors.New("访问方式必须与仓库类型一致")
+	}
+	e.Protocol = protocol
+	if protocol == "nfs" {
+		e.IQN = ""
+		e.Initiators = ""
+	} else {
+		e.Clients = ""
+		e.ReadOnly = false
+		if e.IQN == "" {
+			e.IQN = fmt.Sprintf("iqn.2026-10.local.backup-center:repo-%d-%s", r.ID, strings.ToLower(strings.ReplaceAll(r.Name, "_", "-")))
+		}
+	}
+	return e, validateExport(e, r)
+}
 func validateExport(e Export, r Repository) error {
 	if e.Protocol == "nfs" {
 		if r.Kind != "filesystem" {
@@ -88,7 +112,7 @@ func (a *App) applyExport(ctx context.Context, e Export) error {
 	if err = a.owned(ctx, r.Dataset); err != nil {
 		return err
 	}
-	if err = validateExport(e, r); err != nil {
+	if e, err = normalizeExport(e, r); err != nil {
 		return err
 	}
 	var old Export
