@@ -1,0 +1,29 @@
+[Unit]
+Description=Backup Center storage management service
+Wants=network-online.target zfs.target
+Requires=backup-center-pool-guard.service
+After=network-online.target zfs-import.target zfs-mount.service backup-center-pool-guard.service
+RequiresMountsFor=/var/lib/backup-center
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=TZ=Asia/Shanghai
+EnvironmentFile=-/etc/backup-center/backupd.env
+ExecStart=/opt/backup-center/backupd --listen 127.0.0.1:8080 --data-dir /var/lib/backup-center --pool backup-pool --web-dir /opt/backup-center/web --external-url https://192.0.2.10
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillMode=mixed
+UMask=0077
+LimitNOFILE=65536
+NoNewPrivileges=yes
+# ZFS mounts must propagate to host NFS; mount namespaces would hide real datasets.
+PrivateMounts=no
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

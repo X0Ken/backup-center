@@ -1,0 +1,6 @@
+[Unit]
+Description=Monthly Backup Center ZFS scrub
+After=zfs-import.target
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/zpool scrub backup-pool

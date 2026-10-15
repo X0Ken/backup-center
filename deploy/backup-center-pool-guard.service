@@ -1,0 +1,15 @@
+[Unit]
+Description=Verify backup pool at boot and cleanly export it at shutdown
+Requires=zfs-import-cache.service
+After=zfs-import-cache.service zfs-mount.service
+Before=backupd.service nfs-server.service target.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/zpool status backup-pool
+ExecStop=/opt/backup-center/export-pool.sh
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

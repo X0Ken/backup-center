@@ -1,0 +1,13 @@
+[Unit]
+Description=Load file-backed Backup Center encryption keys before mounting
+DefaultDependencies=no
+Requires=zfs-import-cache.service
+After=zfs-import-cache.service zfs-import.target
+Before=zfs-mount.service
+ConditionPathIsDirectory=/var/lib/backup-center/keys
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/zfs load-key -a
+[Install]
+WantedBy=zfs-mount.service
