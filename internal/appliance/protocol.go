@@ -41,6 +41,9 @@ func normalizeExport(e Export, r Repository, existingIQN ...string) (Export, err
 	return e, validateExport(e, r)
 }
 func (a *App) prepareExport(e Export, r Repository) (Export, error) {
+	if r.Replica {
+		return e, errors.New("接收仓库请基于快照创建新仓库后共享访问")
+	}
 	if a.syncBound(r.ID) && e.Enabled && !e.ReadOnly {
 		return e, errors.New("数据同步仓库只允许只读共享访问")
 	}

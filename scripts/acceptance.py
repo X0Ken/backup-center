@@ -172,67 +172,8 @@ def main():
     preview = request(f"/policies/{repo['id']}/preview")
     assert preview['keep'][second]
     print('PASS: policy persistence and retention preview', flush=True)
-    # A forced-command, no-forwarding SSH key exercises the production send/receive pipeline.
-    # Its only writable destination is this uniquely named disposable dataset.
-    ssh_info = request('/ssh')
-    host_key = subprocess.check_output(['ssh-keygen', '-lf', '/etc/ssh/ssh_host_ed25519_key.pub'], text=True).split()[1]
-    request('/ssh/trust', 'POST', {'host': '192.0.2.13', 'port': 22, 'fingerprint': host_key})
-    parent = 'backup-pool/' + prefix + '-remote'
-    destination = parent + '/replica'
-    subprocess.run(['zfs', 'create', '-o', 'mountpoint=none', parent], check=True)
-    receiver = Path('/tmp') / (prefix + '-receive.py')
-    receiver.write_text('import os,shlex,sys\nargs=shlex.split(os.environ.get("SSH_ORIGINAL_COMMAND",""))\n'
-        + 'parent=' + repr(parent) + '; destination=' + repr(destination) + '\n'
-        + 'allowed=args==["true"] or (len(args)>2 and args[0]=="zfs" and args[1] in ("list","get") and args[-1] in (parent,destination,destination+"@bc-proof-v1",destination+"@bc-proof-v2",destination+"@bc-proof-v3",destination+"@bc-proof-v4")) or args==["zfs","receive","-s","-u",destination]\n'
-        + 'if not allowed: sys.exit(126)\n'
-        + 'os.execvp(args[0],args)\n')
-    receiver.chmod(0o700)
-    authorized = Path('/root/.ssh/authorized_keys')
-    authorized.parent.mkdir(mode=0o700, exist_ok=True)
-    previous = authorized.read_bytes() if authorized.exists() else b''
-    entry = ('restrict,command="/usr/bin/python3 ' + str(receiver) + '" ' + ssh_info['public_key'].strip() + '\n').encode()
-    authorized.write_bytes(previous.rstrip(b'\n') + b'\n' + entry)
-    authorized.chmod(0o600)
-    replication = None
-    try:
-        replication = request('/replications', 'PUT', {'repository_id': repo['id'], 'host': '192.0.2.13', 'user': 'root', 'port': 22, 'target_dataset': destination, 'cron': '', 'enabled': False, 'after_snapshot': False})
-        job('/actions/replicate', {'id': replication['id']})
-        print('PASS: real SSH full replication with remote snapshot GUID verification', flush=True)
-        (mount / 'incremental-proof').write_text('incremental-data')
-        third = job('/actions/snapshot.create', {'repository_id': repo['id'], 'name': 'proof-v3'})['result']
-        job('/actions/replicate', {'id': replication['id']})
-        replicated = subprocess.check_output(['zfs', 'list', '-Ht', 'snapshot', '-o', 'name', '-r', destination], text=True)
-        assert '@bc-proof-v3' in replicated
-        resume_payload = secrets.token_bytes(16 * 1024 * 1024)
-        (mount / 'resume-proof').write_bytes(resume_payload)
-        fourth = job('/actions/snapshot.create', {'repository_id': repo['id'], 'name': 'proof-v4'})['result']
-        sender = subprocess.Popen(['zfs', 'send', '-w', '-i', third, fourth], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        receiver_process = subprocess.Popen(['zfs', 'receive', '-s', '-u', destination], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        partial = sender.stdout.read(1024 * 1024)
-        receiver_process.stdin.write(partial)
-        receiver_process.stdin.close()
-        receiver_process.stdin = None
-        sender.kill()
-        sender.wait()
-        receiver_process.communicate(timeout=30)
-        assert receiver_process.returncode != 0
-        resume_token = subprocess.check_output(['zfs', 'get', '-H', '-o', 'value', 'receive_resume_token', destination], text=True).strip()
-        assert resume_token not in ('', '-')
-        job('/actions/replicate', {'id': replication['id']})
-        print('PASS: interrupted receive preserves token; production job resumes and verifies GUID', flush=True)
-        remote_mount = Path('/mnt') / (prefix + '-replica')
-        subprocess.run(['zfs', 'set', 'mountpoint=' + str(remote_mount), destination], check=True)
-        subprocess.run(['zfs', 'mount', destination], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        assert (remote_mount / 'restore-proof.bin').read_bytes() == b'modified-data'
-        assert (remote_mount / 'incremental-proof').read_text() == 'incremental-data'
-        assert hashlib.sha256((remote_mount / 'resume-proof').read_bytes()).digest() == hashlib.sha256(resume_payload).digest()
-        print('PASS: real SSH incremental replication, GUID and restored file contents', flush=True)
-    finally:
-        if replication is not None:
-            request('/replications/' + str(replication['id']), 'DELETE')
-        authorized.write_bytes(previous)
-        receiver.unlink(missing_ok=True)
-        subprocess.run(['zfs', 'destroy', '-r', parent], check=True)
+    # Cross-platform replication is exercised by verify-platform-replication.py
+    # against a dedicated same-version pair, including actual interrupted upload.
 
     bundle = request('/config/backup', 'POST', {'passphrase': 'acceptance-only-config-passphrase'}, raw=True)
     assert bundle.startswith(b'BCBACKUP1') and b'Password' not in bundle

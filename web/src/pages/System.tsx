@@ -1,3 +1,4 @@
+import PeerSettings from "./PeerSettings";
 import { actionLabel, auditDetail } from "../types";
 import React from "react";
 import { Button, Message, Modal, Tag } from "@arco-design/web-react";
@@ -202,6 +203,12 @@ export default function System({
             ]}
           />
           <section>
+            <PeerSettings
+              rev={rev}
+              form={form}
+              refresh={refresh}
+              showText={showText}
+            />
             <h2>告警通知与配置备份</h2>
             <div className="settings-actions">
               <Button

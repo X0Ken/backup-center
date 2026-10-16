@@ -22,25 +22,28 @@ type Config struct {
 	SecureCookie                               bool
 }
 type App struct {
-	DB         *gorm.DB
-	Run        Runner
-	Config     Config
-	root       string
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	policyWake chan struct{}
-	cron       *cron.Cron
-	scheduleMu sync.Mutex
-	mutationMu sync.Mutex
-	wake       chan struct{}
-	lock       *os.File
-	loginMu    sync.Mutex
-	attempts   map[string][]time.Time
-	syncMu     sync.Mutex
-	syncWake   chan struct{}
-	syncActive map[uint]context.CancelFunc
-	syncRepos  map[uint]bool
+	DB               *gorm.DB
+	Run              Runner
+	Config           Config
+	root             string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	policyWake       chan struct{}
+	cron             *cron.Cron
+	scheduleMu       sync.Mutex
+	mutationMu       sync.Mutex
+	wake             chan struct{}
+	lock             *os.File
+	loginMu          sync.Mutex
+	attempts         map[string][]time.Time
+	replicaMu        sync.Mutex
+	replicaActive    map[uint]context.CancelFunc
+	replicaReceiving map[uint]bool
+	syncMu           sync.Mutex
+	syncWake         chan struct{}
+	syncActive       map[uint]context.CancelFunc
+	syncRepos        map[uint]bool
 }
 
 func Open(cfg Config, runner Runner) (*App, error) {
@@ -84,7 +87,7 @@ func Open(cfg Config, runner Runner) (*App, error) {
 		return nil, err
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err = db.AutoMigrate(&User{}, &Session{}, &Repository{}, &Policy{}, &Job{}, &Audit{}, &Export{}, &Replication{}, &Alert{}, &Metric{}, &Setting{}, &SyncTask{}, &SyncRun{}); err != nil {
+	if err = db.AutoMigrate(&User{}, &Session{}, &Repository{}, &Policy{}, &Job{}, &Audit{}, &Export{}, &Replication{}, &Alert{}, &Metric{}, &Setting{}, &SyncTask{}, &SyncRun{}, &PlatformPeer{}, &ReplicaBinding{}); err != nil {
 		sqlDB.Close()
 		lock.Close()
 		return nil, err
@@ -96,8 +99,9 @@ func Open(cfg Config, runner Runner) (*App, error) {
 	if err = db.Model(&SyncRun{}).Where("status = ?", "running").Updates(map[string]any{"status": "interrupted", "phase": "interrupted", "error": "平台重启中断同步，最近发布版本保留", "finished_at": now}).Error; err != nil {
 		return nil, err
 	}
+	db.Model(&ReplicaBinding{}).Where("state = ?", "receiving").Updates(map[string]any{"state": "interrupted", "last_error": "平台重启，等待发送端续传"})
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{DB: db, Run: runner, Config: cfg, root: cfg.Pool + "/backup-center", ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), policyWake: make(chan struct{}, 1), lock: lock, syncWake: make(chan struct{}, 1), syncActive: map[uint]context.CancelFunc{}, syncRepos: map[uint]bool{}, attempts: map[string][]time.Time{}}
+	a := &App{DB: db, Run: runner, Config: cfg, root: cfg.Pool + "/backup-center", ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), policyWake: make(chan struct{}, 1), lock: lock, syncWake: make(chan struct{}, 1), syncActive: map[uint]context.CancelFunc{}, syncRepos: map[uint]bool{}, replicaActive: map[uint]context.CancelFunc{}, replicaReceiving: map[uint]bool{}, attempts: map[string][]time.Time{}}
 	a.cron = cron.New(cron.WithLocation(time.Local), cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger), cron.Recover(cron.DefaultLogger)))
 	return a, nil
 }
@@ -106,14 +110,16 @@ func (a *App) Start() error {
 		return err
 	}
 	a.cron.Start()
-	a.wg.Add(4)
+	a.wg.Add(5)
 	go a.worker()
 	go a.monitor()
 	go a.policyScheduler()
 	go a.syncScheduler()
+	go a.replicationScheduler()
 	a.signal()
 	return nil
 }
+func (a *App) BeginShutdown() { a.cancel() }
 func (a *App) Close() {
 	a.cancel()
 	a.cron.Stop()
@@ -190,7 +196,7 @@ func (a *App) worker() {
 				return
 			}
 			var j Job
-			if a.DB.Order("id").First(&j, "status = ? AND kind <> ?", "queued", "sync.run").Error != nil {
+			if a.DB.Order("id").First(&j, "status = ? AND kind NOT IN ?", "queued", []string{"sync.run", "replicate"}).Error != nil {
 				break
 			}
 			now := time.Now()

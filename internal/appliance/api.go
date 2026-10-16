@@ -40,6 +40,11 @@ func (a *App) Handler() http.Handler {
 		c.JSON(200, gin.H{"status": "ok", "version": Version})
 	})
 	r.POST("/api/auth/login", a.login)
+	r.POST("/api/peer/pair", a.acceptPair)
+	peer := r.Group("/api/peer", a.peerAuth)
+	peer.POST("/repositories", a.createReplicaReservation)
+	peer.GET("/repositories/:id", a.replicaState)
+	peer.POST("/repositories/:id/receive", a.receiveReplica)
 	api := r.Group("/api", a.auth)
 	api.GET("/auth/me", func(c *gin.Context) {
 		c.JSON(200, gin.H{"user": current(c), "csrf": c.MustGet("session").(Session).CSRF})
@@ -75,11 +80,13 @@ func (a *App) Handler() http.Handler {
 	api.GET("/sync/runs", func(c *gin.Context) {
 		pagedList[SyncRun](c, a.DB.Model(&SyncRun{}).Order("id desc"), []string{"status", "phase", "error", "generation"}, 300)
 	})
+	api.GET("/peers", admin, a.listPeers)
+	api.POST("/peers/invitation", admin, a.pairInvitation)
+	api.POST("/peers", admin, a.savePeer)
+	api.DELETE("/peers/:id", admin, a.deletePeer)
 	api.GET("/replications", a.listReplications)
 	api.PUT("/replications", admin, a.saveReplication)
 	api.DELETE("/replications/:id", admin, a.deleteReplication)
-	api.GET("/ssh", admin, a.sshInfo)
-	api.POST("/ssh/trust", admin, a.trustHost)
 	api.GET("/jobs", func(c *gin.Context) {
 		pagedList[Job](c, a.DB.Model(&Job{}).Order("id desc"), []string{"kind", "target", "status", "error", "result"}, 300)
 	})
@@ -261,11 +268,19 @@ func (a *App) repositories(c *gin.Context) {
 		d, e := a.dataset(c.Request.Context(), r)
 		msg := ""
 		if e != nil {
-			msg = e.Error()
+			if r.Replica {
+				msg = "异地接收仓库尚未完成首轮传输，完成后可从快照创建恢复仓库"
+			} else {
+				msg = e.Error()
+			}
 		}
 		var p Policy
 		a.DB.First(&p, "repository_id = ?", r.ID)
-		rows = append(rows, gin.H{"repository": r, "storage": d, "error": msg, "policy": p})
+		var binding ReplicaBinding
+		if r.Replica {
+			a.DB.Where("repository_id = ?", r.ID).First(&binding)
+		}
+		rows = append(rows, gin.H{"repository": r, "storage": d, "error": msg, "policy": p, "replica_state": binding.State})
 	}
 	c.JSON(200, rows)
 }

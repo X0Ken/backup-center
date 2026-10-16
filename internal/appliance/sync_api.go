@@ -398,7 +398,7 @@ func (a *App) saveSyncTask(c *gin.Context) {
 		return
 	}
 	repo, err := a.repo(q.RepositoryID)
-	if err != nil || repo.Kind != "filesystem" {
+	if err != nil || repo.Replica || repo.Kind != "filesystem" {
 		failure(c, 400, errors.New("请选择专用文件仓库"))
 		return
 	}

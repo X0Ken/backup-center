@@ -82,6 +82,9 @@ func (a *App) prune(ctx context.Context, id uint) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if r.Replica {
+		return "", errors.New("异地接收仓库由复制任务维护，禁止独立清理快照")
+	}
 	if err = a.owned(ctx, r.Dataset); err != nil {
 		return "", err
 	}
@@ -269,16 +272,7 @@ func (a *App) reloadSchedules() error {
 	if _, err := a.cron.AddFunc("* * * * *", a.signalPolicies); err != nil {
 		return err
 	}
-	var reps []Replication
-	if e := a.DB.Where("enabled = ? AND cron <> ?", true, "").Find(&reps).Error; e != nil {
-		return e
-	}
-	for _, rep := range reps {
-		rep := rep
-		if _, err := a.cron.AddFunc(rep.Cron, func() { a.enqueue("replicate", strconv.Itoa(int(rep.ID)), rep.ID, 0) }); err != nil {
-			return err
-		}
-	}
+
 	return nil
 }
 func (a *App) execute(j Job) (string, error) {
@@ -299,6 +293,9 @@ func (a *App) execute(j Job) (string, error) {
 		r, err := a.repo(q.ID)
 		if err != nil {
 			return "", err
+		}
+		if r.Replica {
+			return "", errors.New("接收仓库属性由异地复制维护")
 		}
 		if a.syncBusyRepo(r.ID) {
 			return "", errors.New("该仓库正在同步，请稍后修改属性")
@@ -390,6 +387,9 @@ func (a *App) execute(j Job) (string, error) {
 		r, err := a.repo(id)
 		if err != nil {
 			return "", err
+		}
+		if r.Replica {
+			return "", errors.New("接收仓库属性由异地复制维护")
 		}
 		if a.syncBusyRepo(r.ID) {
 			return "", errors.New("仓库正在同步，请先暂停并等待任务停止")

@@ -4,12 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -31,7 +29,10 @@ func (a *App) savePolicy(c *gin.Context) {
 	if !body(c, &q) {
 		return
 	}
-	if _, e := a.repo(q.RepositoryID); e != nil {
+	if repo, e := a.repo(q.RepositoryID); e != nil || repo.Replica {
+		if e == nil {
+			e = errors.New("接收仓库由异地复制维护，无需配置本地快照策略")
+		}
 		failure(c, 400, e)
 		return
 	}
@@ -125,52 +126,74 @@ func (a *App) listReplications(c *gin.Context) {
 	c.JSON(200, rows)
 }
 func (a *App) saveReplication(c *gin.Context) {
-	var q Replication
+	var q struct {
+		ID           uint   `json:"id"`
+		RepositoryID uint   `json:"repository_id"`
+		RemoteName   string `json:"remote_name"`
+		Enabled      bool   `json:"enabled"`
+	}
 	if !body(c, &q) {
 		return
 	}
-	if e := validateReplication(q); e != nil {
-		failure(c, 400, e)
-		return
-	}
-	if _, e := a.repo(q.RepositoryID); e != nil {
-		failure(c, 404, e)
-		return
-	}
+	a.mutationMu.Lock()
+	defer a.mutationMu.Unlock()
 	if q.ID != 0 {
 		var old Replication
 		if a.DB.First(&old, q.ID).Error != nil {
 			failure(c, 404, errors.New("复制任务不存在"))
 			return
 		}
-		if old.RepositoryID != q.RepositoryID || old.Host != q.Host || old.User != q.User || old.Port != q.Port || old.TargetDataset != q.TargetDataset {
-			failure(c, 400, errors.New("复制目标不可原地修改，请新建任务"))
+		if old.PeerID == 0 {
+			failure(c, 409, errors.New("旧版任务请删除后通过平台互信重新创建"))
 			return
 		}
-		q.LastSnapshot = old.LastSnapshot
-		q.LastGUID = old.LastGUID
-		q.LastRunAt = old.LastRunAt
-		q.Bytes = old.Bytes
-		q.DurationSeconds = old.DurationSeconds
-		q.LastError = old.LastError
-	} else {
-		q.LastSnapshot = ""
-		q.LastGUID = ""
-		q.LastRunAt = nil
-		q.Bytes = 0
-		q.DurationSeconds = 0
-		q.LastError = ""
-	}
-	if e := a.DB.Save(&q).Error; e != nil {
-		failure(c, 500, e)
+		if err := a.DB.Model(&old).Update("enabled", q.Enabled).Error; err != nil {
+			failure(c, 500, err)
+			return
+		}
+		if !q.Enabled {
+			a.replicaMu.Lock()
+			if cancel := a.replicaActive[q.ID]; cancel != nil {
+				cancel()
+			}
+			a.replicaMu.Unlock()
+		} else {
+			a.DB.Model(&old).Update("next_attempt_at", time.Now())
+		}
+		a.audit(current(c).ID, current(c).Username, "replication.save", fmt.Sprint(q.ID), "", c.ClientIP())
+		c.JSON(200, gin.H{"id": q.ID})
 		return
 	}
-	if e := a.reloadSchedules(); e != nil {
-		failure(c, 500, e)
+	repo, err := a.repo(q.RepositoryID)
+	if err != nil || repo.Replica {
+		failure(c, 400, errors.New("请选择本机的业务仓库"))
 		return
 	}
-	a.audit(current(c).ID, current(c).Username, "replication.save", fmt.Sprint(q.ID), "", c.ClientIP())
-	c.JSON(200, q)
+	var peer PlatformPeer
+	if a.DB.Where("direction = ? AND enabled = ?", "outbound", true).First(&peer).Error != nil {
+		failure(c, 409, errors.New("请先在系统管理中配置异地目标平台"))
+		return
+	}
+	if q.RemoteName == "" {
+		q.RemoteName = "【异地复制】" + repoLabel(repo)
+	}
+	if err := validReplicaLabel(q.RemoteName); err != nil {
+		failure(c, 400, err)
+		return
+	}
+	var n int64
+	a.DB.Model(&Replication{}).Where("repository_id = ? AND peer_id = ?", repo.ID, peer.ID).Count(&n)
+	if n > 0 {
+		failure(c, 409, errors.New("该仓库已有异地复制任务"))
+		return
+	}
+	rep := Replication{RepositoryID: repo.ID, PeerID: peer.ID, RemoteName: q.RemoteName, Enabled: true, AfterSnapshot: true, State: "provisioning", NextAttemptAt: time.Now()}
+	if err := a.DB.Create(&rep).Error; err != nil {
+		failure(c, 500, err)
+		return
+	}
+	a.audit(current(c).ID, current(c).Username, "replication.save", fmt.Sprint(rep.ID), "", c.ClientIP())
+	c.JSON(202, rep)
 }
 func (a *App) deleteReplication(c *gin.Context) {
 	id, e := paramID(c)
@@ -190,75 +213,38 @@ func (a *App) deleteReplication(c *gin.Context) {
 		failure(c, 409, errors.New("复制任务正在运行或排队"))
 		return
 	}
-	if rep.LastSnapshot != "" {
-		if _, e = a.zfs(c.Request.Context(), "release", fmt.Sprintf("bc-base-%d", id), rep.LastSnapshot); e != nil {
-			failure(c, 409, e)
+	repo, err := a.repo(rep.RepositoryID)
+	if err != nil {
+		failure(c, 409, err)
+		return
+	}
+	ss, err := a.snapshots(c.Request.Context(), repo)
+	if err != nil {
+		failure(c, 409, err)
+		return
+	}
+	for _, snap := range ss {
+		holds, err := a.zfs(c.Request.Context(), "holds", "-H", snap.Name)
+		if err != nil {
+			failure(c, 409, err)
 			return
 		}
+		for _, tag := range []string{fmt.Sprintf("bc-base-%d", id), fmt.Sprintf("bc-transfer-%d", id)} {
+			if strings.Contains(holds, "\t"+tag+"\t") {
+				if _, err = a.zfs(c.Request.Context(), "release", tag, snap.Name); err != nil {
+					failure(c, 409, err)
+					return
+				}
+			}
+		}
 	}
+
 	if e = a.DB.Delete(&rep).Error; e != nil {
 		failure(c, 500, e)
 		return
 	}
 	a.reloadSchedules()
 	a.audit(current(c).ID, current(c).Username, "replication.delete", fmt.Sprint(id), "", c.ClientIP())
-	c.JSON(200, gin.H{"ok": true})
-}
-func (a *App) sshInfo(c *gin.Context) {
-	key, e := a.ensureSSH()
-	if e != nil {
-		failure(c, 500, e)
-		return
-	}
-	known, _ := os.ReadFile(filepath.Join(a.Config.DataDir, "ssh", "known_hosts"))
-	c.JSON(200, gin.H{"public_key": key, "known_hosts": string(known)})
-}
-func (a *App) trustHost(c *gin.Context) {
-	var q struct {
-		Host        string `json:"host"`
-		Port        int    `json:"port"`
-		Fingerprint string `json:"fingerprint"`
-	}
-	if !body(c, &q) {
-		return
-	}
-	if !hostRE.MatchString(q.Host) || q.Port < 1 || q.Port > 65535 || !strings.HasPrefix(q.Fingerprint, "SHA256:") {
-		failure(c, 400, errors.New("主机、端口或 SHA256 指纹无效"))
-		return
-	}
-	a.mutationMu.Lock()
-	defer a.mutationMu.Unlock()
-	if _, e := a.ensureSSH(); e != nil {
-		failure(c, 500, e)
-		return
-	}
-	out, e := a.Run.Run(c.Request.Context(), "ssh-keyscan", "-T", "8", "-p", strconv.Itoa(q.Port), "-t", "ed25519", q.Host)
-	if e != nil {
-		failure(c, 400, e)
-		return
-	}
-	matched := []string{}
-	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(l, "#") {
-			continue
-		}
-		_, _, key, _, _, err := ssh.ParseKnownHosts([]byte(l))
-		if err == nil && ssh.FingerprintSHA256(key) == q.Fingerprint {
-			matched = append(matched, l)
-		}
-	}
-	if len(matched) == 0 {
-		failure(c, 400, errors.New("扫描结果与人工核实的指纹不一致，拒绝信任"))
-		return
-	}
-	path := filepath.Join(a.Config.DataDir, "ssh", "known_hosts")
-	previous, _ := os.ReadFile(path)
-	data := append(previous, []byte(strings.Join(matched, "\n")+"\n")...)
-	if e = atomicFile(path, data, 0600); e != nil {
-		failure(c, 500, e)
-		return
-	}
-	a.audit(current(c).ID, current(c).Username, "ssh.trust", q.Host, q.Fingerprint, c.ClientIP())
 	c.JSON(200, gin.H{"ok": true})
 }
 func (a *App) listUsers(c *gin.Context) { var rows []User; a.DB.Find(&rows); c.JSON(200, rows) }

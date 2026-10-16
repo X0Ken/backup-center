@@ -15,10 +15,16 @@ export type Tools = {
 };
 export const repoOptions = (rows: Row[] | null) =>
   (rows || []).map((r) => ({
-    label: r.repository.name,
+    label: r.repository.display_name || r.repository.name,
     value: r.repository.id,
   }));
 export const kindLabels: Row = {
+  "peer.invite": "生成平台配对码",
+  "peer.paired": "建立平台接收信任",
+  "peer.save": "连接异地目标平台",
+  "peer.delete": "移除平台信任",
+  "replica.create": "创建异地接收仓库",
+  "replica.receive": "接收异地备份",
   "repository.create": "创建仓库",
   "repository.delete": "删除仓库",
   "repository.properties": "修改仓库属性",

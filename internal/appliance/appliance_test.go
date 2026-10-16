@@ -116,7 +116,7 @@ func TestProtocolRestrictions(t *testing.T) {
 	if validateExport(Export{Protocol: "nfs", Clients: "198.51.100.4"}, Repository{Kind: "volume"}) == nil {
 		t.Fatal("NFS on block accepted")
 	}
-	if validateReplication(Replication{Host: "host;touch /tmp/pwn", User: "root", Port: 22, TargetDataset: "tank/x"}) == nil {
+	if validPeerURL("https://host;touch /tmp/pwn") == nil {
 		t.Fatal("replication shell injection")
 	}
 }

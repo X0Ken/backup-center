@@ -285,6 +285,9 @@ func (a *App) createSnapshotMode(ctx context.Context, q ActionRequest, fromSync 
 	if err != nil {
 		return "", err
 	}
+	if r.Replica {
+		return "", errors.New("接收仓库由异地复制维护，请基于快照创建新仓库")
+	}
 	if !fromSync && a.syncBusyRepo(r.ID) {
 		return "", errors.New("数据同步进行中，请等待本轮完成后创建快照")
 	}
@@ -341,6 +344,9 @@ func (a *App) action(ctx context.Context, kind string, q ActionRequest) (string,
 	}
 	if err = a.owned(ctx, r.Dataset); err != nil {
 		return "", err
+	}
+	if r.Replica && kind != "restore.clone" && kind != "snapshot.hold" && kind != "snapshot.release" {
+		return "", errors.New("接收仓库由异地复制维护，恢复请基于快照创建新仓库")
 	}
 	if (kind == "repository.delete" || kind == "restore.rollback") && a.syncBound(r.ID) {
 		return "", errors.New("仓库已绑定数据同步，请先暂停并删除同步任务；恢复请基于快照创建新仓库")
@@ -402,7 +408,14 @@ func (a *App) action(ctx context.Context, kind string, q ActionRequest) (string,
 			return "", err
 		}
 		target := a.root + "/repos/" + q.Name
-		if _, err = a.zfs(ctx, "clone", "-o", "org.backup-center:managed=yes", q.Snapshot, target); err != nil {
+		cloneArgs := []string{"clone", "-o", "org.backup-center:managed=yes", "-o", "readonly=off"}
+		if r.Kind == "filesystem" {
+			cloneArgs = append(cloneArgs, "-o", "canmount=on", "-o", "mountpoint=/srv/backup-center/repos/"+q.Name)
+		} else {
+			cloneArgs = append(cloneArgs, "-o", "volmode=default")
+		}
+		cloneArgs = append(cloneArgs, q.Snapshot, target)
+		if _, err = a.zfs(ctx, cloneArgs...); err != nil {
 			return "", err
 		}
 		clone := Repository{Name: q.Name, Dataset: target, Kind: r.Kind, Description: "恢复自 " + q.Snapshot}

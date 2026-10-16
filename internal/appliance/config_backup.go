@@ -29,18 +29,25 @@ type backupSyncTask struct {
 	Credential string
 	HostKey    string
 }
+type backupPeer struct {
+	Peer       PlatformPeer
+	Credential string
+	TokenHash  string
+}
 type configBundle struct {
-	SyncTasks    []backupSyncTask
-	Schema       int
-	Pool         string
-	CreatedAt    time.Time
-	Users        []backupUser
-	Repositories []Repository
-	Policies     []Policy
-	Exports      []Export
-	Replications []Replication
-	Settings     []Setting
-	Files        map[string][]byte
+	Peers           []backupPeer
+	ReplicaBindings []ReplicaBinding
+	SyncTasks       []backupSyncTask
+	Schema          int
+	Pool            string
+	CreatedAt       time.Time
+	Users           []backupUser
+	Repositories    []Repository
+	Policies        []Policy
+	Exports         []Export
+	Replications    []Replication
+	Settings        []Setting
+	Files           map[string][]byte
 }
 
 func encryptBundle(plain []byte, password string) ([]byte, error) {
@@ -107,10 +114,17 @@ func (a *App) backupBundle(password string) ([]byte, error) {
 		for _, u := range users {
 			b.Users = append(b.Users, backupUser{u.ID, u.Username, u.Password, u.Role, u.Disabled, u.MustChange, u.CreatedAt})
 		}
-		for _, v := range []any{&b.Repositories, &b.Policies, &b.Exports, &b.Replications, &b.Settings} {
+		for _, v := range []any{&b.Repositories, &b.Policies, &b.Exports, &b.Replications, &b.Settings, &b.ReplicaBindings} {
 			if e := tx.Find(v).Error; e != nil {
 				return e
 			}
+		}
+		var peers []PlatformPeer
+		if e := tx.Find(&peers).Error; e != nil {
+			return e
+		}
+		for _, p := range peers {
+			b.Peers = append(b.Peers, backupPeer{p, p.Credential, p.TokenHash})
 		}
 		var tasks []SyncTask
 		if e := tx.Find(&tasks).Error; e != nil {
@@ -245,12 +259,22 @@ func (a *App) RestoreConfig(data []byte, password string) error {
 					}
 				}
 			case []Replication:
+				for i := range rows {
+					rows[i].Enabled = false
+				}
 				if len(rows) > 0 {
 					if e := tx.Create(&rows).Error; e != nil {
 						return e
 					}
 				}
 			case []Setting:
+				filtered := rows[:0]
+				for _, r := range rows {
+					if r.Key != "peer_pair_invitation" {
+						filtered = append(filtered, r)
+					}
+				}
+				rows = filtered
 				if len(rows) > 0 {
 					if e := tx.Create(&rows).Error; e != nil {
 						return e
@@ -258,6 +282,21 @@ func (a *App) RestoreConfig(data []byte, password string) error {
 				}
 			}
 		}
+		for _, item := range b.Peers {
+			p := item.Peer
+			p.Credential = item.Credential
+			p.TokenHash = item.TokenHash
+			p.Enabled = false
+			if e := tx.Create(&p).Error; e != nil {
+				return e
+			}
+		}
+		if len(b.ReplicaBindings) > 0 {
+			if e := tx.Create(&b.ReplicaBindings).Error; e != nil {
+				return e
+			}
+		}
+
 		for _, item := range b.SyncTasks {
 			task := item.Task
 			task.Credential = item.Credential

@@ -18,6 +18,8 @@ type Session struct {
 	ExpiresAt time.Time `gorm:"index"`
 }
 type Repository struct {
+	DisplayName string    `json:"display_name"`
+	Replica     bool      `json:"replica"`
 	ID          uint      `json:"id" gorm:"primaryKey"`
 	Name        string    `json:"name" gorm:"uniqueIndex;not null"`
 	Dataset     string    `json:"dataset" gorm:"uniqueIndex;not null"`
@@ -73,21 +75,28 @@ type Export struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 type Replication struct {
-	ID              uint       `json:"id" gorm:"primaryKey"`
-	RepositoryID    uint       `json:"repository_id"`
-	Host            string     `json:"host"`
-	User            string     `json:"user"`
-	Port            int        `json:"port"`
-	TargetDataset   string     `json:"target_dataset"`
-	Cron            string     `json:"cron"`
-	Enabled         bool       `json:"enabled"`
-	AfterSnapshot   bool       `json:"after_snapshot"`
-	LastSnapshot    string     `json:"last_snapshot"`
-	LastGUID        string     `json:"last_guid"`
-	LastRunAt       *time.Time `json:"last_run_at"`
-	LastError       string     `json:"last_error"`
-	Bytes           int64      `json:"bytes"`
-	DurationSeconds float64    `json:"duration_seconds"`
+	PeerID             uint       `json:"peer_id"`
+	RemoteRepositoryID uint       `json:"remote_repository_id"`
+	RemoteName         string     `json:"remote_name"`
+	State              string     `json:"state"`
+	NextAttemptAt      time.Time  `json:"next_attempt_at"`
+	Failures           int        `json:"failures"`
+	TransferSnapshot   string     `json:"transfer_snapshot"`
+	ID                 uint       `json:"id" gorm:"primaryKey"`
+	RepositoryID       uint       `json:"repository_id"`
+	Host               string     `json:"host"`
+	User               string     `json:"user"`
+	Port               int        `json:"port"`
+	TargetDataset      string     `json:"target_dataset"`
+	Cron               string     `json:"cron"`
+	Enabled            bool       `json:"enabled"`
+	AfterSnapshot      bool       `json:"after_snapshot"`
+	LastSnapshot       string     `json:"last_snapshot"`
+	LastGUID           string     `json:"last_guid"`
+	LastRunAt          *time.Time `json:"last_run_at"`
+	LastError          string     `json:"last_error"`
+	Bytes              int64      `json:"bytes"`
+	DurationSeconds    float64    `json:"duration_seconds"`
 }
 type Alert struct {
 	ID           uint      `json:"id" gorm:"primaryKey"`
@@ -158,4 +167,27 @@ type SyncRun struct {
 	Log              string     `json:"log"`
 	StartedAt        time.Time  `json:"started_at"`
 	FinishedAt       *time.Time `json:"finished_at"`
+}
+
+// PlatformPeer credentials are scoped to replica reception, never administrator APIs.
+type PlatformPeer struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	Name        string    `json:"name"`
+	Direction   string    `json:"direction"`
+	InstanceID  string    `json:"instance_id"`
+	URL         string    `json:"url"`
+	Fingerprint string    `json:"fingerprint"`
+	Credential  string    `json:"-"`
+	TokenHash   string    `json:"-" gorm:"index"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+type ReplicaBinding struct {
+	ID            uint       `json:"id" gorm:"primaryKey"`
+	PeerID        uint       `json:"peer_id" gorm:"uniqueIndex:replica_source"`
+	TaskKey       string     `json:"task_key" gorm:"uniqueIndex:replica_source"`
+	RepositoryID  uint       `json:"repository_id" gorm:"uniqueIndex"`
+	State         string     `json:"state"`
+	LastError     string     `json:"last_error"`
+	LastSuccessAt *time.Time `json:"last_success_at"`
 }

@@ -160,7 +160,7 @@ test("snapshot, policy, access, audit and disks follow the repository model", as
 
   await page.locator("nav").getByText("异地复制", { exact: true }).click();
   await expect(page.locator(".guidance")).toHaveCount(0);
-  await expect(page.locator(".page-heading p")).toContainText("中断续传");
+  await expect(page.locator(".page-heading p")).toContainText("断点续传");
   await page.locator("nav").getByText("系统管理", { exact: true }).click();
   await expect(
     page.getByRole("cell", { name: "/dev/nvme0n1 备份数据盘", exact: true }),
@@ -379,4 +379,89 @@ test("unified data sync handles host trust and engine-specific credentials", asy
   await expect(
     page.getByRole("dialog", { name: "添加数据同步", exact: true }),
   ).toHaveCount(0);
+});
+
+test("platform replication uses system pairing and a repository-only task form", async ({
+  page,
+}) => {
+  const writes: { path: string; body: any }[] = [];
+  const repos = [
+    { repository: { id: 1, name: "business", kind: "filesystem" } },
+    {
+      repository: {
+        id: 2,
+        name: "replica-abc",
+        display_name: "【异地复制】old",
+        kind: "filesystem",
+        replica: true,
+      },
+    },
+  ];
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace("/api", "");
+    if (path === "/events") {
+      await route.abort();
+      return;
+    }
+    if (route.request().method() !== "GET") {
+      writes.push({ path, body: route.request().postDataJSON() });
+      await route.fulfill({
+        json: {
+          id: 42,
+          code: "one-time-pair-code",
+          expires_at: "2026-10-16T12:00:00Z",
+        },
+      });
+      return;
+    }
+    const data: Record<string, any> = {
+      "/auth/me": {
+        user: { id: 1, username: "admin", role: "admin", must_change: false },
+        csrf: "csrf",
+      },
+      "/repositories": repos,
+      "/peers": [
+        {
+          id: 1,
+          name: "灾备平台",
+          direction: "outbound",
+          url: "https://192.0.2.2",
+        },
+      ],
+      "/replications": [],
+      "/system": { network: "[]", disks: [] },
+      "/overview": {},
+      "/connections": {},
+    };
+    await route.fulfill({ json: data[path] ?? [] });
+  });
+  await page.goto("/#replication");
+  await expect(page.getByText("目标平台：灾备平台")).toBeVisible();
+  await page.getByRole("button", { name: "新建任务", exact: true }).click();
+  const modal = page
+    .locator(".arco-modal")
+    .filter({ hasText: "新建异地复制任务" });
+  await modal.getByLabel("需要备份的仓库").click();
+  await page.getByRole("option", { name: "business", exact: true }).click();
+  await expect(modal.getByLabel("目标仓库名称")).toHaveValue(
+    "【异地复制】business",
+  );
+  await expect(modal.getByText("独立调度")).toHaveCount(0);
+  await expect(modal.getByText("SSH 用户")).toHaveCount(0);
+  await modal.getByLabel("目标仓库名称").fill("公司数据灾备");
+  await modal.getByRole("button", { name: "确定", exact: true }).click();
+  await expect
+    .poll(() => writes.find((w) => w.path === "/replications")?.body)
+    .toEqual({ repository_id: 1, remote_name: "公司数据灾备" });
+  await page
+    .locator("nav")
+    .getByRole("link", { name: "系统管理", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "异地复制平台互信" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "生成接收配对码", exact: true })
+    .click();
+  await expect(page.getByText(/one-time-pair-code/)).toBeVisible();
 });
