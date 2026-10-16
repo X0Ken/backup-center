@@ -245,7 +245,7 @@ function App() {
                         "按仓库类型添加 NFS 或 iSCSI 访问方式，管理客户端权限与挂载入口",
                       sync: "通过 SSH 或 SFTP 持续拉取业务文件，完成一轮后发布有效版本，并结合快照策略保留恢复点",
                       replication:
-                        "同版本平台间自动复制快照，支持后台传输、断点续传和失败重试",
+                        "开始后自动同步已有和新增快照并核对清理，支持断点续传；暂停后停止传输",
                       monitor: "跟踪存储健康、容量变化与待处理告警",
                       jobs: "所有存储操作的执行状态与结果",
                       system: "管理账号、安全配置与设备信息",
@@ -353,7 +353,7 @@ function App() {
         <footer>
           <span>Backup Center</span>
           <span>独立备份 · 定期验证 · 从容恢复</span>
-          <span>v{overview.data?.version || "1.4.1"}</span>
+          <span>v{overview.data?.version || "1.5.0"}</span>
         </footer>
       </div>
       {dialog && (

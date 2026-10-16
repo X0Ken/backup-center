@@ -460,19 +460,15 @@ test("platform replication uses system pairing and a repository-only task form",
   await expect(
     page.getByRole("heading", { name: "异地复制平台互信" }),
   ).toBeVisible();
-  const trustSection = page
-    .locator("section")
-    .filter({
-      has: page.getByRole("heading", { name: "异地复制平台互信", exact: true }),
-    });
-  const notificationSection = page
-    .locator("section")
-    .filter({
-      has: page.getByRole("heading", {
-        name: "告警通知与配置备份",
-        exact: true,
-      }),
-    });
+  const trustSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "异地复制平台互信", exact: true }),
+  });
+  const notificationSection = page.locator("section").filter({
+    has: page.getByRole("heading", {
+      name: "告警通知与配置备份",
+      exact: true,
+    }),
+  });
   const trustBox = await trustSection.boundingBox();
   const notificationBox = await notificationSection.boundingBox();
   expect(trustBox).not.toBeNull();
@@ -485,4 +481,91 @@ test("platform replication uses system pairing and a repository-only task form",
     .getByRole("button", { name: "生成接收配对码", exact: true })
     .click();
   await expect(page.getByText(/one-time-pair-code/)).toBeVisible();
+});
+
+test("replication rows expose only the available start or pause control", async ({
+  page,
+}) => {
+  const tasks = [
+    {
+      id: 11,
+      peer_id: 1,
+      repository_id: 1,
+      remote_name: "running-target",
+      enabled: true,
+      state: "ready",
+      active: false,
+    },
+    {
+      id: 12,
+      peer_id: 1,
+      repository_id: 1,
+      remote_name: "paused-target",
+      enabled: false,
+      state: "paused",
+      active: false,
+    },
+  ];
+  const writes: any[] = [];
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace("/api", "");
+    if (path === "/events") {
+      await route.abort();
+      return;
+    }
+    if (route.request().method() !== "GET") {
+      const body = route.request().postDataJSON();
+      writes.push({ path, body });
+      const task = tasks.find((t) => t.id === body.id);
+      if (task) {
+        task.enabled = body.enabled;
+        task.state = body.enabled ? "pending" : "paused";
+      }
+      await route.fulfill({ json: { id: body.id, enabled: body.enabled } });
+      return;
+    }
+    const data: Record<string, any> = {
+      "/auth/me": {
+        user: { id: 1, username: "admin", role: "admin", must_change: false },
+        csrf: "csrf",
+      },
+      "/repositories": [
+        { repository: { id: 1, name: "source", kind: "filesystem" } },
+      ],
+      "/replications": tasks,
+      "/peers": [{ id: 1, direction: "outbound", url: "https://192.0.2.2" }],
+      "/overview": {},
+    };
+    await route.fulfill({ json: data[path] ?? [] });
+  });
+  await page.goto("/#replication");
+  const running = page.getByRole("row").filter({ hasText: "running-target" });
+  const paused = page.getByRole("row").filter({ hasText: "paused-target" });
+  await expect(
+    running.getByRole("button", { name: "暂停", exact: true }),
+  ).toBeVisible();
+  await expect(
+    running.getByRole("button", { name: "开始", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    paused.getByRole("button", { name: "开始", exact: true }),
+  ).toBeVisible();
+  await expect(
+    paused.getByRole("button", { name: "暂停", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "立即复制", exact: true }),
+  ).toHaveCount(0);
+  await running.getByRole("button", { name: "暂停", exact: true }).click();
+  await expect(
+    running.getByRole("button", { name: "开始", exact: true }),
+  ).toBeVisible();
+  await running.getByRole("button", { name: "开始", exact: true }).click();
+  await expect(
+    running.getByRole("button", { name: "暂停", exact: true }),
+  ).toBeVisible();
+  expect(writes).toEqual([
+    { path: "/replications", body: { id: 11, enabled: false } },
+    { path: "/replications", body: { id: 11, enabled: true } },
+  ]);
 });

@@ -125,6 +125,7 @@ func TestPeerSecretsBackupRestorePaused(t *testing.T) {
 	p := PlatformPeer{Direction: "outbound", Credential: cipher, Enabled: true}
 	a.DB.Create(&p)
 	a.DB.Create(&Replication{PeerID: p.ID, Enabled: true})
+	a.DB.Create(&ReplicaBinding{RepositoryID: 77, PeerID: p.ID, ReseedKey: "saved-catalog", ArchiveRepositoryID: 78, State: "waiting"})
 	blob, e := a.backupBundle("long-enough-backup-password")
 	if e != nil {
 		t.Fatal(e)
@@ -143,5 +144,39 @@ func TestPeerSecretsBackupRestorePaused(t *testing.T) {
 	b.DB.First(&rep)
 	if rep.Enabled {
 		t.Fatal("restored replication automatically enabled")
+	}
+	var binding ReplicaBinding
+	b.DB.First(&binding)
+	if binding.ReseedKey != "saved-catalog" || binding.ArchiveRepositoryID != 78 {
+		t.Fatal("archive recovery intent lost", binding)
+	}
+}
+
+func TestReplicaStateResponseReplacesCatalog(t *testing.T) {
+	calls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			fmt.Fprint(w, `{"snapshots":{"bc-old":"1"}}`)
+		} else {
+			fmt.Fprint(w, `{"snapshots":{}}`)
+		}
+	}))
+	defer server.Close()
+	h := sha256.Sum256(server.Certificate().Raw)
+	a := testApp(t, &fakeRunner{})
+	_, cipher, e := a.cryptSyncSecret(syncSecret{Password: "scoped-token"}, "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	peer := PlatformPeer{URL: server.URL, Fingerprint: hex.EncodeToString(h[:]), Credential: cipher}
+	var state replicaRemoteState
+	for range 2 {
+		if e = a.replicaJSON(context.Background(), peer, "GET", "/repositories/1", nil, &state); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if len(state.Snapshots) != 0 {
+		t.Fatal("obsolete peer snapshot survived a full response", state.Snapshots)
 	}
 }

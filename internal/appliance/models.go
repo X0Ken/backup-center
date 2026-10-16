@@ -75,6 +75,11 @@ type Export struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 type Replication struct {
+	Active             bool       `json:"active" gorm:"-"`
+	LastCatalogHash    string     `json:"catalog_hash"`
+	LastReconciledAt   *time.Time `json:"last_reconciled_at"`
+	PendingSnapshots   int        `json:"pending_snapshots"`
+	ProtectedSnapshots int        `json:"protected_snapshots"`
 	PeerID             uint       `json:"peer_id"`
 	RemoteRepositoryID uint       `json:"remote_repository_id"`
 	RemoteName         string     `json:"remote_name"`
@@ -183,11 +188,13 @@ type PlatformPeer struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 type ReplicaBinding struct {
-	ID            uint       `json:"id" gorm:"primaryKey"`
-	PeerID        uint       `json:"peer_id" gorm:"uniqueIndex:replica_source"`
-	TaskKey       string     `json:"task_key" gorm:"uniqueIndex:replica_source"`
-	RepositoryID  uint       `json:"repository_id" gorm:"uniqueIndex"`
-	State         string     `json:"state"`
-	LastError     string     `json:"last_error"`
-	LastSuccessAt *time.Time `json:"last_success_at"`
+	ReseedKey           string     `json:"reseed_key"`
+	ArchiveRepositoryID uint       `json:"archive_repository_id"`
+	ID                  uint       `json:"id" gorm:"primaryKey"`
+	PeerID              uint       `json:"peer_id" gorm:"uniqueIndex:replica_source"`
+	TaskKey             string     `json:"task_key" gorm:"uniqueIndex:replica_source"`
+	RepositoryID        uint       `json:"repository_id" gorm:"uniqueIndex"`
+	State               string     `json:"state"`
+	LastError           string     `json:"last_error"`
+	LastSuccessAt       *time.Time `json:"last_success_at"`
 }

@@ -5,22 +5,58 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gorm.io/gorm"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 )
 
+func (a *App) signalReplications() {
+	select {
+	case a.replicaWake <- struct{}{}:
+	default:
+	}
+}
+
+// Caller holds mutationMu, serializing control changes with claiming a job.
+func (a *App) setReplicationRunning(rep *Replication, running bool) error {
+	updates := map[string]any{"enabled": running}
+	if running {
+		updates["next_attempt_at"] = time.Now()
+		updates["state"] = "pending"
+	}
+	if err := a.DB.Transaction(func(tx *gorm.DB) error {
+		if !running {
+			if err := tx.Model(&Job{}).Where("kind = ? AND target = ? AND status = ?", "replicate", fmt.Sprint(rep.ID), "queued").Updates(map[string]any{"status": "interrupted", "error": "任务已暂停，未开始传输", "finished_at": time.Now()}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(rep).Updates(updates).Error
+	}); err != nil {
+		return err
+	}
+
+	if !running {
+		a.replicaMu.Lock()
+		cancel := a.replicaActive[rep.ID]
+		a.replicaMu.Unlock()
+		if cancel != nil {
+			cancel()
+		} else {
+			a.DB.Model(rep).Update("state", "paused")
+		}
+	}
+	a.signalReplications()
+	return nil
+}
 func (a *App) replicationScheduler() {
 	defer a.wg.Done()
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
-	// Legacy SSH targets cannot meet same-platform trust; retain their records for
-	// inspection, but never continue them silently after upgrading.
 	a.DB.Model(&Replication{}).Where("peer_id = ?", 0).Updates(map[string]any{"enabled": false, "cron": "", "state": "legacy", "last_error": "请通过系统管理配对目标平台后重新创建任务"})
 	a.DB.Model(&Replication{}).Where("peer_id <> ?", 0).Updates(map[string]any{"cron": "", "after_snapshot": true})
 	for {
@@ -29,6 +65,7 @@ func (a *App) replicationScheduler() {
 		case <-a.ctx.Done():
 			return
 		case <-tick.C:
+		case <-a.replicaWake:
 		}
 	}
 }
@@ -45,25 +82,20 @@ func (a *App) dispatchReplications() {
 	a.mutationMu.Lock()
 	defer a.mutationMu.Unlock()
 	var reps []Replication
-	a.DB.Where("peer_id <> ? AND enabled = ? AND next_attempt_at <= ?", 0, true, time.Now()).Order("id").Find(&reps)
+	a.DB.Where("peer_id <> ? AND enabled = ? AND next_attempt_at <= ?", 0, true, time.Now()).Order("next_attempt_at,id").Find(&reps)
 	for _, rep := range reps {
-		needed := rep.RemoteRepositoryID == 0 || rep.State == "retrying" || rep.State == "sending" || rep.TransferSnapshot != ""
+		needed := rep.RemoteRepositoryID == 0 || contains([]string{"pending", "retrying", "sending", "catching_up"}, rep.State) || rep.TransferSnapshot != "" || rep.LastReconciledAt == nil || time.Since(*rep.LastReconciledAt) >= time.Minute
 		if !needed {
 			r, e := a.repo(rep.RepositoryID)
 			if e != nil {
 				continue
 			}
-			ss, e := a.snapshots(a.ctx, r)
+			catalog, e := a.replicaCatalog(a.ctx, r)
 			if e != nil {
-				continue
+				needed = true
+			} else {
+				needed = rep.LastCatalogHash != catalogHash(catalog)
 			}
-			var latest Snapshot
-			for _, s := range ss {
-				if s.Managed && strings.HasPrefix(s.Name, r.Dataset+"@bc-") && s.Txg >= latest.Txg {
-					latest = s
-				}
-			}
-			needed = latest.Name != "" && latest.Name != rep.LastSnapshot
 		}
 		if needed {
 			_, _ = a.enqueue("replicate", fmt.Sprint(rep.ID), rep.ID, 0)
@@ -80,7 +112,7 @@ func (a *App) dispatchReplications() {
 	}
 	var rep Replication
 	if a.DB.First(&rep, id).Error != nil || rep.PeerID == 0 || !rep.Enabled {
-		a.DB.Model(&j).Updates(map[string]any{"status": "interrupted", "error": "任务已暂停或需要迁移"})
+		a.DB.Model(&j).Updates(map[string]any{"status": "interrupted", "error": "任务已暂停或需要迁移", "finished_at": time.Now()})
 		return
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 7*24*time.Hour)
@@ -88,21 +120,31 @@ func (a *App) dispatchReplications() {
 	a.replicaActive[id] = cancel
 	a.replicaMu.Unlock()
 	now := time.Now()
-	a.DB.Model(&j).Updates(map[string]any{"status": "running", "started_at": now})
+	if e := a.DB.Model(&j).Updates(map[string]any{"status": "running", "started_at": now}).Error; e != nil {
+		cancel()
+		a.replicaMu.Lock()
+		delete(a.replicaActive, id)
+		a.replicaMu.Unlock()
+		return
+	}
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
 		defer cancel()
-		defer func() { a.replicaMu.Lock(); delete(a.replicaActive, id); a.replicaMu.Unlock() }()
+		defer func() { a.replicaMu.Lock(); delete(a.replicaActive, id); a.replicaMu.Unlock(); a.signalReplications() }()
 		result, e := a.replicate(ctx, id)
 		finish := time.Now()
 		status, msg := "succeeded", ""
+		a.mutationMu.Lock()
+		var latest Replication
+		a.DB.First(&latest, id)
 		if e != nil {
 			status = "failed"
 			msg = e.Error()
 			if ctx.Err() != nil {
 				status = "interrupted"
 			}
+			state := "retrying"
 			shift := rep.Failures
 			if shift > 6 {
 				shift = 6
@@ -111,15 +153,32 @@ func (a *App) dispatchReplications() {
 			if delay > 30*time.Minute {
 				delay = 30 * time.Minute
 			}
-			a.DB.Model(&Replication{}).Where("id = ?", id).Updates(map[string]any{"state": "retrying", "last_error": msg, "failures": rep.Failures + 1, "next_attempt_at": finish.Add(delay)})
+			next := finish.Add(delay)
+			failures := rep.Failures + 1
+			if ctx.Err() != nil {
+				failures = latest.Failures
+				msg = "传输已停止，续传状态和已完成的异地副本已保留"
+				if latest.Enabled {
+					state = "pending"
+					next = finish
+				} else {
+					state = "paused"
+				}
+			}
+			a.DB.Model(&Replication{}).Where("id = ?", id).Updates(map[string]any{"state": state, "last_error": map[bool]string{true: "", false: msg}[ctx.Err() != nil], "failures": failures, "next_attempt_at": next})
 			if status == "failed" {
 				a.raise("replication-"+fmt.Sprint(id), "warning", msg)
 			}
 		} else {
-			a.DB.Model(&Replication{}).Where("id = ?", id).Updates(map[string]any{"last_error": "", "failures": 0, "next_attempt_at": finish.Add(5 * time.Second)})
+			updates := map[string]any{"last_error": "", "failures": 0, "next_attempt_at": finish.Add(5 * time.Second)}
+			if !latest.Enabled {
+				updates["state"] = "paused"
+			}
+			a.DB.Model(&Replication{}).Where("id = ?", id).Updates(updates)
 			a.DB.Model(&Alert{}).Where("key = ?", "replication-"+fmt.Sprint(id)).Update("active", false)
 		}
 		a.DB.Model(&j).Updates(map[string]any{"status": status, "error": msg, "result": result, "finished_at": finish})
+		a.mutationMu.Unlock()
 		a.audit(j.UserID, "", "replicate."+status, fmt.Sprint(id), msg, "")
 	}()
 }
@@ -128,8 +187,11 @@ func (a *App) replicate(ctx context.Context, id uint) (string, error) {
 	if e := a.DB.First(&rep, id).Error; e != nil {
 		return "", e
 	}
+	if !rep.Enabled {
+		return "", context.Canceled
+	}
 	if rep.PeerID == 0 {
-		return "", errors.New("旧版复制任务需要重新配对目标平台")
+		return "", errors.New("旧版任务需要重新配对")
 	}
 	var peer PlatformPeer
 	if a.DB.Where("id = ? AND enabled = ? AND direction = ?", rep.PeerID, true, "outbound").First(&peer).Error != nil {
@@ -143,22 +205,18 @@ func (a *App) replicate(ctx context.Context, id uint) (string, error) {
 		return "", e
 	}
 	start := time.Now()
-	var transferred int64
+	var bytes int64
 	defer func() {
-		a.DB.Model(&Replication{}).Where("id = ?", id).Updates(map[string]any{"last_run_at": start, "duration_seconds": time.Since(start).Seconds(), "bytes": transferred})
+		a.DB.Model(&Replication{}).Where("id = ?", id).Updates(map[string]any{"last_run_at": start, "duration_seconds": time.Since(start).Seconds(), "bytes": bytes})
 	}()
 	if rep.RemoteRepositoryID == 0 {
 		a.DB.Model(&rep).Update("state", "provisioning")
-		key, err := a.replicaEncryptionKey(ctx, repo)
-		if err != nil {
-			return "", err
-		}
-		raw, _ := json.Marshal(map[string]any{"task_key": "task-" + strconv.Itoa(int(id)), "name": rep.RemoteName, "kind": repo.Kind, "encryption_key": key})
-		var state replicaRemoteState
-		short, cancel := context.WithTimeout(ctx, 30*time.Second)
-		e = a.peerRequest(short, peer, "POST", "/repositories", strings.NewReader(string(raw)), &state)
-		cancel()
+		key, e := a.replicaEncryptionKey(ctx, repo)
 		if e != nil {
+			return "", e
+		}
+		var state replicaRemoteState
+		if e = a.replicaJSON(ctx, peer, "POST", "/repositories", map[string]any{"task_key": "task-" + strconv.Itoa(int(id)), "name": rep.RemoteName, "kind": repo.Kind, "encryption_key": key}, &state); e != nil {
 			return "", e
 		}
 		if state.Repository.ID == 0 || !state.Repository.Replica || state.Repository.Kind != repo.Kind {
@@ -171,74 +229,54 @@ func (a *App) replicate(ctx context.Context, id uint) (string, error) {
 	}
 	path := "/repositories/" + strconv.Itoa(int(rep.RemoteRepositoryID))
 	var remote replicaRemoteState
-	short, cancel := context.WithTimeout(ctx, 30*time.Second)
-	e = a.peerRequest(short, peer, "GET", path, nil, &remote)
-	cancel()
-	if e != nil {
+	if e = a.replicaJSON(ctx, peer, "GET", path, nil, &remote); e != nil {
 		return "", e
 	}
 	if remote.ResumeToken != "" {
 		a.DB.Model(&rep).Update("state", "sending")
 		n, e := a.streamPeer(ctx, rep, peer, path, []string{"send", "-t", remote.ResumeToken})
-		transferred += n
+		bytes += n
 		if e != nil {
 			return "", e
 		}
-		short, cancel = context.WithTimeout(ctx, 30*time.Second)
-		e = a.peerRequest(short, peer, "GET", path, nil, &remote)
-		cancel()
-		if e != nil {
+		if e = a.replicaJSON(ctx, peer, "GET", path, nil, &remote); e != nil {
 			return "", e
 		}
 	}
-	// A transfer hold survives failures/restarts until the remote has acknowledged
-	// its GUID, so a resume token always retains its matching source snapshot.
-
-	ss, e := a.snapshots(ctx, repo)
+	catalog, e := a.replicaCatalog(ctx, repo)
 	if e != nil {
 		return "", e
 	}
-	var managed []Snapshot
-	for _, s := range ss {
-		if s.Managed && strings.HasPrefix(s.Name, repo.Dataset+"@bc-") {
-			managed = append(managed, s)
+	// Old releases sent only the newest snapshot. Preserve that branch, including
+	// clone dependencies, before rebuilding a complete chronological history.
+	if needsReplicaReseed(catalog, remote.Snapshots) {
+		if e = a.replicaJSON(ctx, peer, "POST", path+"/reseed", map[string]string{"catalog_hash": catalogHash(catalog)}, &remote); e != nil {
+			return "", e
 		}
+		rep.TransferSnapshot = ""
 	}
-	if len(managed) == 0 {
-		a.DB.Model(&rep).Update("state", "waiting")
-		return "目标仓库已登记，等待首个快照", nil
-	}
-	sort.Slice(managed, func(i, j int) bool { return managed[i].Txg < managed[j].Txg })
-	latest := managed[len(managed)-1]
-	guid, e := a.snapshotGUID(ctx, latest.Name)
-	if e != nil {
-		return "", e
-	}
-	latestName := strings.SplitN(latest.Name, "@", 2)[1]
-	if remote.Snapshots[latestName] != guid {
+	pending := missingReplicaSnapshots(catalog, remote.Snapshots)
+	a.DB.Model(&rep).Update("pending_snapshots", len(pending))
+	for i, target := range pending {
+		if i >= 8 {
+			break
+		}
+		if e = ctx.Err(); e != nil {
+			return "", e
+		}
 		base := ""
-		for _, s := range managed {
-			g, e := a.snapshotGUID(ctx, s.Name)
-			if e != nil {
-				return "", e
-			}
-			if remote.Snapshots[strings.SplitN(s.Name, "@", 2)[1]] == g {
+		for _, s := range catalog {
+			if s.Txg < target.Txg && remote.Snapshots[s.shortName()] == s.GUID {
 				base = s.Name
 			}
 		}
-		// Acknowledged older interrupted transfer can now be released after the base
-		// hold below has been set, including when newer snapshots arrived meanwhile.
 		a.mutationMu.Lock()
-		if base != "" {
+		e = a.holdReplica(ctx, target.Name, fmt.Sprintf("bc-transfer-%d", id))
+		if e == nil && base != "" {
 			e = a.holdReplica(ctx, base, fmt.Sprintf("bc-base-%d", id))
-			if e != nil {
-				a.mutationMu.Unlock()
-				return "", e
-			}
 		}
-		e = a.holdReplica(ctx, latest.Name, fmt.Sprintf("bc-transfer-%d", id))
 		if e == nil {
-			e = a.DB.Model(&rep).Updates(map[string]any{"transfer_snapshot": latest.Name, "state": "sending"}).Error
+			e = a.DB.Model(&rep).Updates(map[string]any{"transfer_snapshot": target.Name, "state": "sending"}).Error
 		}
 		a.mutationMu.Unlock()
 		if e != nil {
@@ -248,43 +286,113 @@ func (a *App) replicate(ctx context.Context, id uint) (string, error) {
 		if base != "" {
 			args = append(args, "-i", base)
 		}
-		args = append(args, latest.Name)
+		args = append(args, target.Name)
 		n, e := a.streamPeer(ctx, rep, peer, path, args)
-		transferred += n
+		bytes += n
 		if e != nil {
 			return "", e
 		}
-		short, cancel = context.WithTimeout(ctx, 30*time.Second)
-		e = a.peerRequest(short, peer, "GET", path, nil, &remote)
-		cancel()
-		if e != nil {
+		if e = a.replicaJSON(ctx, peer, "GET", path, nil, &remote); e != nil {
+			return "", e
+		}
+		if remote.Snapshots[target.shortName()] != target.GUID {
+			return "", errors.New("异地快照 GUID 校验失败，保留源快照等待重试")
+		}
+		if e = a.ackReplicaSnapshot(ctx, &rep, target, base); e != nil {
 			return "", e
 		}
 	}
-	if remote.Snapshots[latestName] != guid {
-		return "", errors.New("复制后快照 GUID 校验失败，未推进基线")
+	// Re-read after transfer: retention may have coalesced obsolete local snapshots
+	// while the network was busy. Only reconcile a freshly verified complete set.
+	fresh, e := a.replicaCatalog(ctx, repo)
+	if e != nil {
+		return "", e
 	}
+	pending = missingReplicaSnapshots(fresh, remote.Snapshots)
+	if len(pending) > 0 {
+		a.DB.Model(&rep).Updates(map[string]any{"state": "catching_up", "pending_snapshots": len(pending)})
+		return fmt.Sprintf("已传输 %d 字节，剩余 %d 个快照等待自动处理", bytes, len(pending)), nil
+	}
+	now := time.Now()
+	if len(fresh) == 0 {
+		a.DB.Model(&rep).Updates(map[string]any{"state": "waiting", "pending_snapshots": 0, "last_catalog_hash": catalogHash(fresh), "last_reconciled_at": now})
+		return "等待源快照，保留已有异地副本", nil
+	}
+	latest := fresh[len(fresh)-1]
+	if e = a.ackReplicaSnapshot(ctx, &rep, latest); e != nil {
+		return "", e
+	}
+	keep := map[string]string{}
+	for _, s := range fresh {
+		keep[s.shortName()] = s.GUID
+	}
+	var reconciled replicaReconcileResult
+	if e = a.replicaJSON(ctx, peer, "POST", path+"/reconcile", replicaReconcileInput{Snapshots: keep, Baseline: latest.GUID}, &reconciled); e != nil {
+		return "", e
+	}
+	if e = ctx.Err(); e != nil {
+		return "", e
+	}
+	a.DB.Model(&rep).Updates(map[string]any{"state": "ready", "pending_snapshots": 0, "protected_snapshots": len(reconciled.Protected), "last_catalog_hash": catalogHash(fresh), "last_reconciled_at": now})
+	return fmt.Sprintf("异地快照集合已核对，传输 %d 字节；清理 %d 个过期快照，保留 %d 个受保护快照", bytes, len(reconciled.Deleted), len(reconciled.Protected)), nil
+}
+func (a *App) replicaJSON(ctx context.Context, p PlatformPeer, method, path string, input, output any) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	var body io.Reader
+	if input != nil {
+		raw, e := json.Marshal(input)
+		if e != nil {
+			return e
+		}
+		body = strings.NewReader(string(raw))
+	}
+	// A peer response is a full catalog, not a patch. json.Unmarshal otherwise
+	// retains map entries omitted by a reseed or snapshot deletion.
+	if state, ok := output.(*replicaRemoteState); ok {
+		*state = replicaRemoteState{}
+	}
+	return a.peerRequest(ctx, p, method, path, body, output)
+}
+func (a *App) ackReplicaSnapshot(ctx context.Context, rep *Replication, target replicaSnapshot, bases ...string) error {
 	a.mutationMu.Lock()
 	defer a.mutationMu.Unlock()
-	if e = a.holdReplica(ctx, latest.Name, fmt.Sprintf("bc-base-%d", id)); e != nil {
-		return "", e
+	if e := ctx.Err(); e != nil {
+		return e
 	}
-	if e = a.DB.Model(&rep).Updates(map[string]any{"last_snapshot": latest.Name, "last_guid": guid, "transfer_snapshot": "", "state": "ready"}).Error; e != nil {
-		return "", e
+	previous := append([]string{rep.LastSnapshot, rep.TransferSnapshot, target.Name}, bases...)
+	tag := fmt.Sprintf("bc-base-%d", rep.ID)
+	if e := a.holdReplica(ctx, target.Name, tag); e != nil {
+		return e
 	}
-	// Release only this task's obsolete holds after durable acknowledgement.
-	for _, s := range managed {
-		holds, e := a.zfs(ctx, "holds", "-H", s.Name)
-		if e != nil {
+	if e := a.DB.Model(rep).Updates(map[string]any{"last_snapshot": target.Name, "last_guid": target.GUID, "transfer_snapshot": ""}).Error; e != nil {
+		return e
+	}
+	// Only the previous base, active transfer and the actual common base can
+	// carry this task's holds. Avoid scanning the entire history for every point.
+	seen := map[string]bool{}
+	prefix := strings.SplitN(target.Name, "@", 2)[0] + "@"
+	for _, name := range previous {
+		if name == "" || seen[name] || !strings.HasPrefix(name, prefix) {
 			continue
 		}
-		for _, tag := range []string{fmt.Sprintf("bc-base-%d", id), fmt.Sprintf("bc-transfer-%d", id)} {
-			if (s.Name != latest.Name || strings.HasPrefix(tag, "bc-transfer-")) && strings.Contains(holds, "\t"+tag+"\t") {
-				_, _ = a.zfs(ctx, "release", tag, s.Name)
+		seen[name] = true
+		holds, e := a.zfs(ctx, "holds", "-H", name)
+		if e != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			continue
+		}
+		for _, t := range []string{tag, fmt.Sprintf("bc-transfer-%d", rep.ID)} {
+			if (name != target.Name || t != tag) && strings.Contains(holds, "\t"+t+"\t") {
+				if _, e = a.zfs(ctx, "release", t, name); e != nil {
+					return e
+				}
 			}
 		}
 	}
-	return fmt.Sprintf("远端仓库 #%d，快照 GUID 校验完成，传输 %d 字节", rep.RemoteRepositoryID, transferred), nil
+	return nil
 }
 func (a *App) snapshotGUID(ctx context.Context, s string) (string, error) {
 	v, e := a.zfs(ctx, "get", "-Hp", "-o", "value", "guid", s)

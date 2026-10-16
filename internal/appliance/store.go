@@ -37,6 +37,7 @@ type App struct {
 	lock             *os.File
 	loginMu          sync.Mutex
 	attempts         map[string][]time.Time
+	replicaWake      chan struct{}
 	replicaMu        sync.Mutex
 	replicaActive    map[uint]context.CancelFunc
 	replicaReceiving map[uint]bool
@@ -101,7 +102,7 @@ func Open(cfg Config, runner Runner) (*App, error) {
 	}
 	db.Model(&ReplicaBinding{}).Where("state = ?", "receiving").Updates(map[string]any{"state": "interrupted", "last_error": "平台重启，等待发送端续传"})
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{DB: db, Run: runner, Config: cfg, root: cfg.Pool + "/backup-center", ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), policyWake: make(chan struct{}, 1), lock: lock, syncWake: make(chan struct{}, 1), syncActive: map[uint]context.CancelFunc{}, syncRepos: map[uint]bool{}, replicaActive: map[uint]context.CancelFunc{}, replicaReceiving: map[uint]bool{}, attempts: map[string][]time.Time{}}
+	a := &App{DB: db, Run: runner, Config: cfg, root: cfg.Pool + "/backup-center", ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), policyWake: make(chan struct{}, 1), lock: lock, syncWake: make(chan struct{}, 1), syncActive: map[uint]context.CancelFunc{}, syncRepos: map[uint]bool{}, replicaWake: make(chan struct{}, 1), replicaActive: map[uint]context.CancelFunc{}, replicaReceiving: map[uint]bool{}, attempts: map[string][]time.Time{}}
 	a.cron = cron.New(cron.WithLocation(time.Local), cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger), cron.Recover(cron.DefaultLogger)))
 	return a, nil
 }

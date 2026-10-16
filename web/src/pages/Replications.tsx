@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import {
   Button,
+  Dropdown,
   Input,
   Message,
   Modal,
@@ -17,16 +18,12 @@ const states: Row = {
   waiting: "等待快照",
   sending: "正在传输",
   retrying: "等待续传重试",
-  ready: "已校验",
+  ready: "已追平，等待变化",
+  pending: "等待调度",
+  catching_up: "追赶快照",
   legacy: "需重新配置",
 };
-export default function Replications({
-  rev,
-  repos,
-  admin,
-  perform,
-  refresh,
-}: Tools) {
+export default function Replications({ rev, repos, admin, refresh }: Tools) {
   const reps = useData<Row[]>("/replications", rev);
   const peers = useData<Row[]>(admin ? "/peers" : "", rev);
   const target = peers.data?.find((p) => p.direction === "outbound");
@@ -34,6 +31,7 @@ export default function Replications({
   const [repository, setRepository] = useState<number>();
   const [name, setName] = useState("");
   const [custom, setCustom] = useState(false);
+  const [controlling, setControlling] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const sourceName = (id?: number) => {
     const r = repos?.find((r) => r.repository.id === id)?.repository;
@@ -100,8 +98,22 @@ export default function Replications({
                           : "blue"
                   }
                 >
-                  {!r.enabled ? "已暂停" : states[r.state] || "排队中"}
+                  {!r.enabled
+                    ? r.active
+                      ? "暂停中"
+                      : "已暂停"
+                    : states[r.state] || "排队中"}
                 </Tag>
+                {!!r.pending_snapshots && r.enabled && (
+                  <small className="cell-sub">
+                    待同步 {r.pending_snapshots} 个快照
+                  </small>
+                )}
+                {!!r.protected_snapshots && (
+                  <small className="cell-sub">
+                    保留 {r.protected_snapshots} 个受保护的历史快照
+                  </small>
+                )}
                 {r.last_error && (
                   <small className="cell-sub text-danger">{r.last_error}</small>
                 )}
@@ -125,49 +137,64 @@ export default function Replications({
               admin && (
                 <div className="row-actions">
                   {r.peer_id > 0 && (
-                    <>
-                      <Button
-                        type="text"
-                        disabled={!r.enabled}
-                        onClick={() => perform("replicate", { id: r.id })}
-                      >
-                        立即复制
-                      </Button>
-                      <Button
-                        type="text"
-                        onClick={async () => {
-                          try {
-                            await api("/replications", "PUT", {
-                              id: r.id,
-                              enabled: !r.enabled,
-                            });
-                            refresh();
-                          } catch (e: any) {
-                            Message.error(e.message);
-                          }
-                        }}
-                      >
-                        {r.enabled ? "暂停" : "启用"}
-                      </Button>
-                    </>
-                  )}
-                  <Button
-                    type="text"
-                    status="danger"
-                    onClick={() =>
-                      Modal.confirm({
-                        title: "删除复制任务",
-                        content:
-                          "仅删除任务配置并释放本机基线保护，远端仓库和数据会保留。请先暂停并等待当前传输结束。",
-                        onOk: async () => {
-                          await api("/replications/" + r.id, "DELETE");
+                    <Button
+                      type="text"
+                      loading={controlling === r.id}
+                      disabled={!r.enabled && r.active}
+                      onClick={async () => {
+                        setControlling(r.id);
+                        try {
+                          await api("/replications", "PUT", {
+                            id: r.id,
+                            enabled: !r.enabled,
+                          });
+                          Message.success(
+                            r.enabled
+                              ? "已暂停，当前传输正在停止"
+                              : "已开始，后台将自动同步快照",
+                          );
                           refresh();
-                        },
-                      })
+                        } catch (e: any) {
+                          Message.error(e.message);
+                        } finally {
+                          setControlling(null);
+                        }
+                      }}
+                    >
+                      {!r.enabled && r.active
+                        ? "暂停中"
+                        : r.enabled
+                          ? "暂停"
+                          : "开始"}
+                    </Button>
+                  )}
+                  <Dropdown
+                    trigger="click"
+                    droplist={
+                      <div className="repository-more">
+                        <Button
+                          type="text"
+                          status="danger"
+                          disabled={r.enabled || r.active}
+                          onClick={() =>
+                            Modal.confirm({
+                              title: "删除复制任务",
+                              content:
+                                "仅删除任务配置并释放本机基线保护，远端仓库和数据会保留。",
+                              onOk: async () => {
+                                await api("/replications/" + r.id, "DELETE");
+                                refresh();
+                              },
+                            })
+                          }
+                        >
+                          删除任务
+                        </Button>
+                      </div>
                     }
                   >
-                    删除
-                  </Button>
+                    <Button type="text">更多</Button>
+                  </Dropdown>
                 </div>
               ),
           },
@@ -189,7 +216,7 @@ export default function Replications({
               repository_id: repository,
               remote_name: name,
             });
-            Message.success("任务已提交，正在后台创建远端仓库");
+            Message.success("任务已开始，后台自动创建远端仓库并同步快照");
             setOpen(false);
             refresh();
           } catch (e: any) {
@@ -231,7 +258,7 @@ export default function Replications({
           placeholder="选择仓库后自动生成，可修改"
         />
         <p className="muted">
-          新快照自动触发异步复制。中断后保留接收状态并自动重试，无需额外调度。
+          创建后自动开始，补齐已有快照并持续同步新增与清理变化。暂停后停止传输，再次开始可续传。
         </p>
       </Modal>
     </>

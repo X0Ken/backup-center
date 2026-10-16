@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -328,13 +327,7 @@ func (a *App) createSnapshotMode(ctx context.Context, q ActionRequest, fromSync 
 			return s, err
 		}
 	}
-	var reps []Replication
-	a.DB.Where("repository_id = ? AND enabled = ? AND after_snapshot = ?", r.ID, true, true).Find(&reps)
-	for _, rep := range reps {
-		if _, e := a.enqueue("replicate", strconv.Itoa(int(rep.ID)), rep.ID, 0); e != nil {
-			return s, e
-		}
-	}
+	a.signalReplications()
 	return s, nil
 }
 func (a *App) action(ctx context.Context, kind string, q ActionRequest) (string, error) {

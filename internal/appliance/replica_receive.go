@@ -135,6 +135,10 @@ func (a *App) replicaState(c *gin.Context) {
 		failure(c, 404, e)
 		return
 	}
+	if e = a.recoverReplicaReseed(c, r, &b); e != nil {
+		failure(c, 409, e)
+		return
+	}
 	state, e := a.replicaStatus(c.Request.Context(), r, b)
 	if e != nil {
 		failure(c, 409, e)
@@ -146,6 +150,10 @@ func (a *App) receiveReplica(c *gin.Context) {
 	r, b, e := a.incomingRepo(c)
 	if e != nil {
 		failure(c, 404, e)
+		return
+	}
+	if b.State == "archiving" {
+		failure(c, 409, errors.New("历史副本尚未准备完毕，请稍后重试"))
 		return
 	}
 	a.mutationMu.Lock()

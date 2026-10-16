@@ -45,6 +45,8 @@ func (a *App) Handler() http.Handler {
 	peer.POST("/repositories", a.createReplicaReservation)
 	peer.GET("/repositories/:id", a.replicaState)
 	peer.POST("/repositories/:id/receive", a.receiveReplica)
+	peer.POST("/repositories/:id/reconcile", a.reconcileReplica)
+	peer.POST("/repositories/:id/reseed", a.reseedReplica)
 	api := r.Group("/api", a.auth)
 	api.GET("/auth/me", func(c *gin.Context) {
 		c.JSON(200, gin.H{"user": current(c), "csrf": c.MustGet("session").(Session).CSRF})
@@ -222,7 +224,11 @@ func (a *App) submitAction(c *gin.Context) {
 		a.submit(c, kind, a.Config.Pool, nil)
 		return
 	}
-	if kind == "replicate" || kind == "retention.prune" || kind == "key.load" || kind == "key.unload" {
+	if kind == "replicate" {
+		failure(c, 400, errors.New("异地复制由开始和暂停控制，后台自动安排传输"))
+		return
+	}
+	if kind == "retention.prune" || kind == "key.load" || kind == "key.unload" {
 		var q struct {
 			ID uint `json:"id"`
 		}

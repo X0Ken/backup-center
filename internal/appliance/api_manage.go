@@ -123,6 +123,11 @@ func (a *App) connections(c *gin.Context) {
 func (a *App) listReplications(c *gin.Context) {
 	var rows []Replication
 	a.DB.Find(&rows)
+	a.replicaMu.Lock()
+	for i := range rows {
+		rows[i].Active = a.replicaActive[rows[i].ID] != nil
+	}
+	a.replicaMu.Unlock()
 	c.JSON(200, rows)
 }
 func (a *App) saveReplication(c *gin.Context) {
@@ -147,21 +152,14 @@ func (a *App) saveReplication(c *gin.Context) {
 			failure(c, 409, errors.New("旧版任务请删除后通过平台互信重新创建"))
 			return
 		}
-		if err := a.DB.Model(&old).Update("enabled", q.Enabled).Error; err != nil {
+
+		if err := a.setReplicationRunning(&old, q.Enabled); err != nil {
 			failure(c, 500, err)
 			return
 		}
-		if !q.Enabled {
-			a.replicaMu.Lock()
-			if cancel := a.replicaActive[q.ID]; cancel != nil {
-				cancel()
-			}
-			a.replicaMu.Unlock()
-		} else {
-			a.DB.Model(&old).Update("next_attempt_at", time.Now())
-		}
-		a.audit(current(c).ID, current(c).Username, "replication.save", fmt.Sprint(q.ID), "", c.ClientIP())
-		c.JSON(200, gin.H{"id": q.ID})
+
+		a.audit(current(c).ID, current(c).Username, map[bool]string{true: "replication.start", false: "replication.pause"}[q.Enabled], fmt.Sprint(q.ID), "", c.ClientIP())
+		c.JSON(200, gin.H{"id": q.ID, "enabled": q.Enabled})
 		return
 	}
 	repo, err := a.repo(q.RepositoryID)
@@ -192,6 +190,7 @@ func (a *App) saveReplication(c *gin.Context) {
 		failure(c, 500, err)
 		return
 	}
+	a.signalReplications()
 	a.audit(current(c).ID, current(c).Username, "replication.save", fmt.Sprint(rep.ID), "", c.ClientIP())
 	c.JSON(202, rep)
 }
