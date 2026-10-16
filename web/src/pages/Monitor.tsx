@@ -87,6 +87,10 @@ export default function Monitor({
           endpoint="/alerts"
           revision={rev}
           tableName="告警"
+          searchFields={[
+            { key: "severity", label: "级别" },
+            { key: "message", label: "事件" },
+          ]}
           columns={[
             {
               title: "级别",

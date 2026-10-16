@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -650,6 +651,23 @@ func TestHistoryPaginationAndLiteralFiltering(t *testing.T) {
 	for _, path := range []string{"/api/jobs?page=0", "/api/jobs?page=1&page_size=101", "/api/audit?page=-1"} {
 		if res := request(t, h, "GET", path, "", token, csrf); res.Code != 400 {
 			t.Fatalf("accepted invalid pagination %s: %s", path, res.Body)
+		}
+	}
+	for _, tc := range []struct {
+		filters string
+		code    int
+		total   int64
+	}{
+		{`[{"field":"target","value":"repo-1"},{"field":"status","value":"succeeded"}]`, 200, 100},
+		{`[{"field":"target","value":"repo-1"},{"field":"status","value":"failed"}]`, 200, 0},
+		{`[{"field":"","value":"%_"},{"field":"kind","value":"snapshot.create"}]`, 200, 1},
+		{`[{"field":"target) OR 1=1 --","value":"x"}]`, 400, 0},
+		{`[{"field":"target","value":""}]`, 400, 0},
+		{`invalid`, 400, 0},
+	} {
+		w = request(t, h, "GET", "/api/jobs?page=1&page_size=10&filters="+url.QueryEscape(tc.filters), "", token, csrf)
+		if w.Code != tc.code || (tc.code == 200 && (json.Unmarshal(w.Body.Bytes(), &page) != nil || page.Total != tc.total)) {
+			t.Fatalf("bad structured filters %s: %s", tc.filters, w.Body)
 		}
 	}
 	var legacy []Job

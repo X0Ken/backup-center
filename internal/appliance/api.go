@@ -80,7 +80,7 @@ func (a *App) Handler() http.Handler {
 	api.DELETE("/sync/tasks/:id", admin, a.deleteSyncTask)
 	api.POST("/sync/tasks/:id/:operation", admin, a.syncControl)
 	api.GET("/sync/runs", func(c *gin.Context) {
-		pagedList[SyncRun](c, a.DB.Model(&SyncRun{}).Order("id desc"), []string{"status", "phase", "error", "generation"}, 300)
+		pagedList[SyncRun](c, a.DB.Model(&SyncRun{}).Order("id desc"), []string{"task_id", "status", "phase", "error", "generation", "started_at", "files", "bytes", "transferred_bytes"}, 300)
 	})
 	api.GET("/peers", admin, a.listPeers)
 	api.POST("/peers/invitation", admin, a.pairInvitation)
@@ -90,7 +90,7 @@ func (a *App) Handler() http.Handler {
 	api.PUT("/replications", admin, a.saveReplication)
 	api.DELETE("/replications/:id", admin, a.deleteReplication)
 	api.GET("/jobs", func(c *gin.Context) {
-		pagedList[Job](c, a.DB.Model(&Job{}).Order("id desc"), []string{"kind", "target", "status", "error", "result"}, 300)
+		pagedList[Job](c, a.DB.Model(&Job{}).Order("id desc"), []string{"id", "kind", "target", "status", "error", "result", "created_at"}, 300)
 	})
 	api.GET("/jobs/:id", func(c *gin.Context) {
 		id, e := paramID(c)
@@ -105,7 +105,7 @@ func (a *App) Handler() http.Handler {
 		c.JSON(200, j)
 	})
 	api.GET("/audit", admin, func(c *gin.Context) {
-		pagedList[Audit](c, a.DB.Model(&Audit{}).Order("id desc"), []string{"username", "action", "target", "detail", "ip"}, 1000)
+		pagedList[Audit](c, a.DB.Model(&Audit{}).Order("id desc"), []string{"username", "action", "target", "detail", "ip", "created_at"}, 1000)
 	})
 	api.GET("/monitor", a.monitorInfo)
 	api.GET("/metrics", func(c *gin.Context) {

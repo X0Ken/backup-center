@@ -124,6 +124,30 @@ export default function Repositories({
       <DataTable
         rows={repos.data}
         tableName="仓库"
+        searchFields={[
+          {
+            key: "name",
+            label: "仓库名称",
+            value: (r) =>
+              `${r.repository.name} ${r.repository.display_name || ""}`,
+          },
+          {
+            key: "description",
+            label: "用途",
+            value: (r) => r.repository.description,
+          },
+          {
+            key: "kind",
+            label: "类型",
+            value: (r) =>
+              r.repository.kind === "volume" ? "块卷 iSCSI" : "文件仓库 NFS",
+          },
+          {
+            key: "compression",
+            label: "压缩",
+            value: (r) => r.storage.compression,
+          },
+        ]}
         searchText={(r) =>
           `${r.repository.kind === "volume" ? "块卷 iSCSI" : "文件仓库 NFS"} ${r.storage.key_status === "unavailable" ? "密钥未加载" : "可用"}`
         }

@@ -98,6 +98,18 @@ export default function Protocols({
       <DataTable
         rows={data.data}
         tableName="共享访问"
+        searchFields={[
+          {
+            key: "repository",
+            label: "仓库",
+            value: (r) =>
+              repos?.find((x) => x.repository.id === r.repository_id)
+                ?.repository.name,
+          },
+          { key: "protocol", label: "协议" },
+          { key: "clients", label: "客户端地址" },
+          { key: "initiators", label: "客户端 IQN" },
+        ]}
         searchText={(r) =>
           repos?.find((x) => x.repository.id === r.repository_id)?.repository
             .name || ""

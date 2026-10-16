@@ -290,6 +290,39 @@ test("repository shortcuts preserve filters, pagination totals and fixed policy 
   await expect(snaps.getByRole("status")).toHaveText(
     "共 2 条（筛选前 50 条） · 第 1 / 1 页",
   );
+  await page.getByRole("button", { name: "清空快照搜索", exact: true }).click();
+  const input = page.getByLabel("筛选快照", { exact: true });
+  await input.click();
+  await page
+    .getByLabel("搜索项", { exact: true })
+    .getByRole("button", { name: "仓库", exact: true })
+    .click();
+  await input.fill("repo-25");
+  await input.press("Enter");
+  await expect(
+    page
+      .locator(".table-search .arco-tag")
+      .filter({ hasText: "仓库：repo-25" }),
+  ).toBeVisible();
+  await input.click();
+  await page
+    .getByLabel("搜索项", { exact: true })
+    .getByRole("button", { name: "快照名称", exact: true })
+    .click();
+  await input.fill("bc-2");
+  await input.press("Enter");
+  await expect(snaps.getByRole("status")).toHaveText(
+    "共 1 条（筛选前 50 条） · 第 1 / 1 页",
+  );
+  await expect(snaps.locator("tbody")).toContainText("repo-25@bc-2");
+  await page
+    .locator(".table-search .arco-tag")
+    .filter({ hasText: "快照名称：bc-2" })
+    .locator(".arco-tag-close-btn")
+    .click();
+  await expect(snaps.getByRole("status")).toHaveText(
+    "共 2 条（筛选前 50 条） · 第 1 / 1 页",
+  );
   await page.evaluate(() => {
     location.hash = "policies?repository_id=24";
   });

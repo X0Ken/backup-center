@@ -10,6 +10,7 @@ import {
   Switch,
   Table,
   Pagination,
+  Popover,
   Tag,
   Message,
   Spin,
@@ -23,7 +24,7 @@ import {
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import { api, bytes, date } from "./api";
-import { actionLabel } from "./types";
+import { actionLabel, actionLabels, kindLabels } from "./types";
 echarts.use([
   LineChart,
   GridComponent,
@@ -211,6 +212,12 @@ export function Status({ value }: { value: string }) {
     </Tag>
   );
 }
+export type SearchField = {
+  key: string;
+  label: string;
+  value?: (row: Row) => unknown;
+};
+type SearchCondition = { field: string; value: string };
 export function DataTable({
   rows,
   columns,
@@ -221,6 +228,7 @@ export function DataTable({
   endpoint,
   revision = 0,
   filterKey,
+  searchFields,
 }: {
   rows: any[] | null;
   columns: any[];
@@ -231,9 +239,63 @@ export function DataTable({
   endpoint?: string;
   revision?: number;
   filterKey?: string;
+  searchFields?: SearchField[];
 }) {
   const [keyword, setKeyword] = useState("");
   const [query, setQuery] = useState("");
+  const [conditions, setConditions] = useState<SearchCondition[]>([]);
+  const [activeField, setActiveField] = useState("");
+  const [choosingField, setChoosingField] = useState(false);
+  const inputRef = useRef<any>(null);
+  const fields: SearchField[] =
+    searchFields ||
+    columns
+      .filter((c) => c.dataIndex && typeof c.title === "string")
+      .map((c) => ({ key: c.dataIndex, label: c.title }));
+  const fieldLabel = (key: string) =>
+    fields.find((f) => f.key === key)?.label || "关键词";
+  const addCondition = () => {
+    const value = keyword.trim();
+    if (!value || conditions.length >= 20) return;
+    setConditions((items) =>
+      items.some((c) => c.field === activeField && c.value === value)
+        ? items
+        : [...items, { field: activeField, value }],
+    );
+    setKeyword("");
+    setQuery("");
+    setActiveField("");
+    setPage(1);
+    setChoosingField(false);
+  };
+  const effectiveConditions = [
+    ...conditions,
+    ...(query ? [{ field: activeField, value: query }] : []),
+  ];
+  const encodedConditions = JSON.stringify(
+    effectiveConditions.map((condition) => {
+      const labels: Record<string, string> =
+        condition.field === "kind"
+          ? kindLabels
+          : condition.field === "action"
+            ? actionLabels
+            : condition.field === "status" || condition.field === "phase"
+              ? {
+                  queued: "排队中",
+                  running: "执行中",
+                  succeeded: "已完成",
+                  failed: "失败",
+                  interrupted: "已中断",
+                }
+              : condition.field === "severity"
+                ? { critical: "严重", warning: "警告" }
+                : {};
+      const match = Object.entries(labels).find(
+        ([, label]) => label === condition.value,
+      );
+      return { ...condition, value: match?.[0] || condition.value };
+    }),
+  );
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
   useEffect(() => setPage(1), [filterKey]);
@@ -253,7 +315,7 @@ export function DataTable({
     const q = new URLSearchParams({
       page: String(page),
       page_size: String(size),
-      q: query,
+      filters: encodedConditions,
     });
     api(endpoint + "?" + q)
       .then((data) => {
@@ -275,18 +337,39 @@ export function DataTable({
     return () => {
       active = false;
     };
-  }, [endpoint, revision, page, size, query]);
+  }, [endpoint, revision, page, size, encodedConditions]);
   const filtered = useMemo(() => {
     if (endpoint) return remote?.items || [];
-    const term = keyword.trim().toLocaleLowerCase();
-    return (rows || []).filter(
-      (r) =>
-        !term ||
-        (JSON.stringify(r) + " " + (searchText?.(r) || ""))
+    const checks = [
+      ...conditions,
+      ...(keyword.trim()
+        ? [{ field: activeField, value: keyword.trim() }]
+        : []),
+    ];
+    return (rows || []).filter((r) =>
+      checks.every((condition) => {
+        const field = fields.find((f) => f.key === condition.field);
+        const raw = field
+          ? field.value
+            ? field.value(r)
+            : field.key.split(".").reduce((v: any, k) => v?.[k], r)
+          : JSON.stringify(r) + " " + (searchText?.(r) || "");
+        return String(raw ?? "")
           .toLocaleLowerCase()
-          .includes(term),
+          .includes(condition.value.toLocaleLowerCase());
+      }),
     );
-  }, [rows, keyword, searchText, endpoint, remote]);
+  }, [
+    rows,
+    keyword,
+    activeField,
+    conditions,
+    searchText,
+    fields,
+    endpoint,
+    remote,
+  ]);
+  const hasSearch = conditions.length > 0 || !!keyword;
   const total = endpoint ? remote?.total || 0 : filtered.length;
   const pages = Math.max(1, Math.ceil(total / size));
   const current = Math.min(page, pages);
@@ -296,17 +379,98 @@ export function DataTable({
   return (
     <div className="data-table" aria-label={tableName + "表格"}>
       <div className="table-tools">
-        <Input.Search
-          aria-label={"筛选" + tableName}
-          placeholder="输入关键词筛选"
-          allowClear
-          value={keyword}
-          onChange={(v) => {
-            setKeyword(v);
-            setPage(1);
-          }}
-          style={{ width: 300, maxWidth: "100%" }}
-        />
+        <Popover
+          trigger="click"
+          position="bl"
+          popupVisible={choosingField}
+          onVisibleChange={setChoosingField}
+          content={
+            <div className="search-field-menu" aria-label="搜索项">
+              <span className="muted">
+                选择搜索项，输入值后按回车添加；多个条件同时满足
+              </span>
+              {[{ key: "", label: "关键词" }, ...fields].map((field) => (
+                <Button
+                  key={field.key}
+                  type="text"
+                  onClick={() => {
+                    setActiveField(field.key);
+                    setChoosingField(false);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  {field.label}
+                </Button>
+              ))}
+            </div>
+          }
+        >
+          <div
+            className="table-search"
+            onClick={() => inputRef.current?.focus()}
+          >
+            {conditions.map((condition, index) => (
+              <Tag
+                key={index}
+                closable
+                onClose={(e) => {
+                  e.stopPropagation();
+                  setConditions((items) => items.filter((_, i) => i !== index));
+                  setPage(1);
+                }}
+              >
+                {fieldLabel(condition.field)}：{condition.value}
+              </Tag>
+            ))}
+            {activeField && (
+              <Tag color="arcoblue">{fieldLabel(activeField)}</Tag>
+            )}
+            <Input
+              ref={inputRef}
+              aria-label={"筛选" + tableName}
+              placeholder={
+                activeField
+                  ? `输入${fieldLabel(activeField)}，回车添加`
+                  : "点击选择搜索项，输入值后回车添加"
+              }
+              disabled={conditions.length >= 20}
+              maxLength={200}
+              value={keyword}
+              onChange={(v) => {
+                setKeyword(v);
+                setPage(1);
+              }}
+              onPressEnter={addCondition}
+            />
+            {hasSearch && (
+              <Button
+                type="text"
+                aria-label={"清空" + tableName + "搜索"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConditions([]);
+                  setKeyword("");
+                  setActiveField("");
+                  setPage(1);
+                  setChoosingField(false);
+                }}
+              >
+                清空
+              </Button>
+            )}
+            <Button
+              type="text"
+              aria-label={"添加" + tableName + "搜索条件"}
+              disabled={!keyword.trim() || conditions.length >= 20}
+              onClick={(e) => {
+                e.stopPropagation();
+                addCondition();
+              }}
+            >
+              添加条件
+            </Button>
+          </div>
+        </Popover>
       </div>
       <ErrorBox error={error} />
       <Table
@@ -320,15 +484,17 @@ export function DataTable({
         loading={loading || (endpoint ? busy : rows === null)}
         pagination={false}
         noDataElement={
-          <div className="empty">{keyword ? "没有匹配的记录" : "暂无记录"}</div>
+          <div className="empty">
+            {hasSearch ? "没有匹配的记录" : "暂无记录"}
+          </div>
         }
         scroll={{ x: 900 }}
       />
       <div className="table-footer">
         <span role="status">
           共 {total} 条
-          {!endpoint && keyword && rows ? `（筛选前 ${rows.length} 条）` : ""} ·
-          第 {current} / {pages} 页
+          {!endpoint && hasSearch && rows ? `（筛选前 ${rows.length} 条）` : ""}{" "}
+          · 第 {current} / {pages} 页
         </span>
         <Pagination
           current={current}

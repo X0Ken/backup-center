@@ -152,6 +152,20 @@ export default function Policies({
             ) || null
           }
           tableName="快照策略"
+          searchFields={[
+            {
+              key: "repository",
+              label: "仓库",
+              value: (p) =>
+                repos?.find((r) => r.repository.id === p.repository_id)
+                  ?.repository.name,
+            },
+            {
+              key: "status",
+              label: "状态",
+              value: (p) => (p.enabled ? "已启用" : "已暂停"),
+            },
+          ]}
           filterKey={String(repositoryFilter)}
           searchText={(p) =>
             `${repos?.find((r) => r.repository.id === p.repository_id)?.repository.name || ""} ${p.enabled ? "已启用" : "已暂停"}`

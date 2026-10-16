@@ -64,6 +64,20 @@ export default function Replications({ rev, repos, admin, refresh }: Tools) {
       <ErrorBox error={reps.error || peers.error} />
       <DataTable
         rows={reps.data}
+        tableName="异地复制"
+        searchFields={[
+          {
+            key: "source",
+            label: "源仓库",
+            value: (r) => sourceName(r.repository_id),
+          },
+          { key: "remote_name", label: "目标仓库" },
+          {
+            key: "enabled",
+            label: "状态",
+            value: (r) => (r.enabled ? "已开始" : "已暂停"),
+          },
+        ]}
         columns={[
           {
             title: "源仓库",

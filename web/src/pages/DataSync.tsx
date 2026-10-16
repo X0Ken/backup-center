@@ -368,6 +368,19 @@ export default function DataSync({
       <DataTable
         rows={data.data}
         tableName="数据同步"
+        searchFields={[
+          { key: "task.name", label: "任务名称" },
+          { key: "task.host", label: "源主机" },
+          { key: "task.source_path", label: "源目录" },
+          {
+            key: "repository",
+            label: "目标仓库",
+            value: (r) =>
+              repos?.find((x) => x.repository.id === r.task.repository_id)
+                ?.repository.name,
+          },
+          { key: "task.access_method", label: "访问方式" },
+        ]}
         searchText={(r) =>
           repos?.find((x) => x.repository.id === r.task.repository_id)
             ?.repository.name || ""

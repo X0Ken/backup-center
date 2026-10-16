@@ -125,6 +125,22 @@ export default function SnapshotPage({
           snaps.data?.filter((s) => !filter || s.repository_id === filter) || []
         }
         tableName="快照"
+        searchFields={[
+          {
+            key: "repository",
+            label: "仓库",
+            value: (s) =>
+              repos?.find((r) => r.repository.id === s.repository_id)
+                ?.repository.name,
+          },
+          { key: "name", label: "快照名称" },
+          { key: "created_at", label: "创建时间" },
+          {
+            key: "protection",
+            label: "保护状态",
+            value: (s) => (s.holds > 0 ? "已保护" : "常规保留"),
+          },
+        ]}
         filterKey={String(filter)}
         searchText={(s) =>
           `${repos?.find((r) => r.repository.id === s.repository_id)?.repository.name || ""} ${s.holds > 0 ? "已保护" : "常规保留"}`

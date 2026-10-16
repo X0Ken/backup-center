@@ -36,6 +36,15 @@ export default function Jobs({ rev }: { rev: number }) {
         endpoint="/jobs"
         revision={rev}
         tableName="任务"
+        searchFields={[
+          { key: "id", label: "任务编号" },
+          { key: "kind", label: "操作" },
+          { key: "target", label: "目标" },
+          { key: "status", label: "状态" },
+          { key: "created_at", label: "提交时间" },
+          { key: "error", label: "错误信息" },
+          { key: "result", label: "执行结果" },
+        ]}
         columns={[
           { title: "#", dataIndex: "id", width: 70 },
           {

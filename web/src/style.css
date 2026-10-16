@@ -754,3 +754,41 @@ footer {
 
 .sync-browser { margin:12px 0; padding:12px; border:1px solid #e6ebf2; border-radius:6px; }
 .sync-directories { display:flex; flex-wrap:wrap;gap:8px;max-height:200px;overflow:auto; }
+
+.table-search {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-bg-2);
+  cursor: text;
+}
+.table-search:focus-within {
+  border-color: rgb(var(--primary-6));
+}
+.table-search .arco-input-wrapper {
+  flex: 1;
+  min-width: 230px;
+  background: transparent;
+  border: none;
+}
+.table-search .arco-tag {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.search-field-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: min(560px, calc(100vw - 64px));
+}
+.search-field-menu > span {
+  flex-basis: 100%;
+  padding: 4px 8px;
+}
