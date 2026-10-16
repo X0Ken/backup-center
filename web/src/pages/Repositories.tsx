@@ -1,6 +1,7 @@
+import { editPolicy } from "./Policies";
 import { showClientGuide } from "../ClientGuide";
-import React from "react";
-import { Button, Message, Tag } from "@arco-design/web-react";
+import React, { useState } from "react";
+import { Button, Dropdown, Message, Tag } from "@arco-design/web-react";
 import { IconPlus } from "@arco-design/web-react/icon";
 import { api, bytes } from "../api";
 import { DataTable, ErrorBox, Row } from "../components";
@@ -15,6 +16,7 @@ export default function Repositories({
 }: Omit<Tools, "rev" | "repos"> & {
   repos: { data: Row[] | null; error: string };
 }) {
+  const [moreFor, setMoreFor] = useState<number | null>(null);
   return (
     <>
       <div className="section-toolbar">
@@ -121,6 +123,10 @@ export default function Repositories({
       <ErrorBox error={repos.error} />
       <DataTable
         rows={repos.data}
+        tableName="仓库"
+        searchText={(r) =>
+          `${r.repository.kind === "volume" ? "块卷 iSCSI" : "文件仓库 NFS"} ${r.storage.key_status === "unavailable" ? "密钥未加载" : "可用"}`
+        }
         rowKey="repository.id"
         columns={[
           {
@@ -174,7 +180,7 @@ export default function Repositories({
           },
           {
             title: "操作",
-            width: 320,
+            width: 300,
             render: (_: any, r: Row) => (
               <div className="row-actions">
                 <Button
@@ -189,116 +195,168 @@ export default function Repositories({
                 </Button>
                 <Button
                   type="text"
-                  onClick={() => showClientGuide(r.repository.id)}
+                  onClick={() => {
+                    location.hash = `snapshots?repository_id=${r.repository.id}`;
+                  }}
                 >
-                  接入指南
+                  查看快照
                 </Button>
-                {admin && (
-                  <>
-                    <Button
-                      type="text"
-                      onClick={() =>
-                        form(
-                          "编辑仓库属性",
-                          [
-                            {
-                              key: "quota",
-                              label: "容量配额",
-                              visible: () => r.repository.kind === "filesystem",
-                              value:
-                                r.storage.quota === "0"
-                                  ? "none"
-                                  : r.storage.quota,
-                            },
-                            {
-                              key: "compression",
-                              label: "压缩算法",
-                              type: "select",
-                              value: r.storage.compression,
-                              options: ["lz4", "zstd", "off"].map((value) => ({
-                                label: value,
-                                value,
-                              })),
-                            },
-                            {
-                              key: "sync",
-                              label: "同步写入",
-                              type: "select",
-                              value: "standard",
-                              options: [
-                                {
-                                  label: "standard",
-                                  value: "standard",
-                                },
-                                { label: "always", value: "always" },
-                              ],
-                            },
-                          ],
-                          async (v) => {
-                            const j = await api(
-                              "/repositories/" + r.repository.id,
-                              "PATCH",
-                              {
-                                properties:
-                                  r.repository.kind === "volume"
-                                    ? {
-                                        compression: v.compression,
-                                        sync: v.sync,
-                                      }
-                                    : v,
-                              },
-                            );
-                            Message.success(`属性任务 #${j.id} 已提交`);
-                            refresh();
-                          },
-                        )
-                      }
+                <Dropdown
+                  trigger="click"
+                  popupVisible={moreFor === r.repository.id}
+                  onVisibleChange={(visible) =>
+                    setMoreFor(visible ? r.repository.id : null)
+                  }
+                  position="br"
+                  droplist={
+                    <div
+                      className="repository-more"
+                      onClick={() => setMoreFor(null)}
                     >
-                      属性
-                    </Button>
-                    <Button
-                      type="text"
-                      status="danger"
-                      onClick={() =>
-                        form(
-                          "删除仓库",
-                          [
-                            {
-                              key: "confirm",
-                              label: `输入仓库名称 ${r.repository.name}`,
-                              required: true,
-                            },
-                          ],
-                          (v) =>
-                            perform("repository.delete", {
-                              ...v,
-                              repository_id: r.repository.id,
-                            }),
-                          "删除将永久移除仓库数据。存在快照、子数据集或协议导出时将拒绝执行。",
-                        )
-                      }
-                    >
-                      删除
-                    </Button>
-                    {r.storage.encryption !== "off" && (
                       <Button
                         type="text"
-                        onClick={() =>
-                          perform(
-                            r.storage.key_status === "available"
-                              ? "key.unload"
-                              : "key.load",
-                            { id: r.repository.id },
-                          )
-                        }
+                        onClick={() => {
+                          location.hash = `policies?repository_id=${r.repository.id}`;
+                        }}
                       >
-                        {r.storage.key_status === "available"
-                          ? "卸载密钥"
-                          : "加载密钥"}
+                        查看备份策略
                       </Button>
-                    )}
-                  </>
-                )}
+                      {admin && (
+                        <Button
+                          type="text"
+                          onClick={() =>
+                            editPolicy(
+                              form,
+                              [r],
+                              refresh,
+                              r.policy?.id ? r.policy : undefined,
+                              r.repository.id,
+                            )
+                          }
+                        >
+                          编辑备份策略
+                        </Button>
+                      )}
+                      <Button
+                        type="text"
+                        onClick={() => showClientGuide(r.repository.id)}
+                      >
+                        接入指南
+                      </Button>
+                      {admin && (
+                        <>
+                          <Button
+                            type="text"
+                            onClick={() =>
+                              form(
+                                "编辑仓库属性",
+                                [
+                                  {
+                                    key: "quota",
+                                    label: "容量配额",
+                                    visible: () =>
+                                      r.repository.kind === "filesystem",
+                                    value:
+                                      r.storage.quota === "0"
+                                        ? "none"
+                                        : r.storage.quota,
+                                  },
+                                  {
+                                    key: "compression",
+                                    label: "压缩算法",
+                                    type: "select",
+                                    value: r.storage.compression,
+                                    options: ["lz4", "zstd", "off"].map(
+                                      (value) => ({
+                                        label: value,
+                                        value,
+                                      }),
+                                    ),
+                                  },
+                                  {
+                                    key: "sync",
+                                    label: "同步写入",
+                                    type: "select",
+                                    value: "standard",
+                                    options: [
+                                      {
+                                        label: "standard",
+                                        value: "standard",
+                                      },
+                                      { label: "always", value: "always" },
+                                    ],
+                                  },
+                                ],
+                                async (v) => {
+                                  const j = await api(
+                                    "/repositories/" + r.repository.id,
+                                    "PATCH",
+                                    {
+                                      properties:
+                                        r.repository.kind === "volume"
+                                          ? {
+                                              compression: v.compression,
+                                              sync: v.sync,
+                                            }
+                                          : v,
+                                    },
+                                  );
+                                  Message.success(`属性任务 #${j.id} 已提交`);
+                                  refresh();
+                                },
+                              )
+                            }
+                          >
+                            属性
+                          </Button>
+                          <Button
+                            type="text"
+                            status="danger"
+                            onClick={() =>
+                              form(
+                                "删除仓库",
+                                [
+                                  {
+                                    key: "confirm",
+                                    label: `输入仓库名称 ${r.repository.name}`,
+                                    required: true,
+                                  },
+                                ],
+                                (v) =>
+                                  perform("repository.delete", {
+                                    ...v,
+                                    repository_id: r.repository.id,
+                                  }),
+                                "删除将永久移除仓库数据。存在快照、子数据集或协议导出时将拒绝执行。",
+                              )
+                            }
+                          >
+                            删除
+                          </Button>
+                          {r.storage.encryption !== "off" && (
+                            <Button
+                              type="text"
+                              onClick={() =>
+                                perform(
+                                  r.storage.key_status === "available"
+                                    ? "key.unload"
+                                    : "key.load",
+                                  { id: r.repository.id },
+                                )
+                              }
+                            >
+                              {r.storage.key_status === "available"
+                                ? "卸载密钥"
+                                : "加载密钥"}
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  }
+                >
+                  <Button type="text">更多操作</Button>
+                </Dropdown>
               </div>
             ),
           },

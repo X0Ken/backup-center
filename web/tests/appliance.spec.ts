@@ -55,6 +55,7 @@ test("HTTPS login, all workspaces, real UI repository creation and snapshot", as
     await page.getByLabel("仓库名称", { exact: true }).fill(name);
     await page.getByLabel("容量配额", { exact: true }).fill("1G");
     await page.getByRole("button", { name: "创建", exact: true }).click();
+    await page.getByLabel("筛选仓库", { exact: true }).fill(name);
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible({
       timeout: 30000,
     });
@@ -66,6 +67,7 @@ test("HTTPS login, all workspaces, real UI repository creation and snapshot", as
       .locator("nav")
       .getByRole("link", { name: "快照", exact: true })
       .click();
+    await page.getByLabel("筛选快照", { exact: true }).fill(name);
     await expect(page.getByText(new RegExp(name + "@bc-")).first()).toBeVisible(
       { timeout: 30000 },
     );

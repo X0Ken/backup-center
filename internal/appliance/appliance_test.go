@@ -582,3 +582,79 @@ func TestPhysicalDiskInventory(t *testing.T) {
 		t.Fatal("invalid inventory silently accepted")
 	}
 }
+
+func TestTargetIQNIsPlatformOwned(t *testing.T) {
+	r := Repository{ID: 41, Name: "Mysql_A", Kind: "volume"}
+	q := Export{Initiators: "iqn.2026-10.local.client:allowed"}
+	generated, err := normalizeExport(q, r)
+	if err != nil || generated.IQN != "iqn.2026-10.local.backup-center:repo-41-mysql-a" {
+		t.Fatalf("bad generated IQN: %+v %v", generated, err)
+	}
+	q.IQN = "iqn.2026-10.local.user:custom"
+	if _, err := normalizeExport(q, r); err == nil {
+		t.Fatal("user-supplied target IQN accepted")
+	}
+	old := "iqn.2026-10.local.legacy:existing"
+	q.IQN = ""
+	preserved, err := normalizeExport(q, r, old)
+	if err != nil || preserved.IQN != old {
+		t.Fatal("existing target changed")
+	}
+	q.IQN = generated.IQN
+	if _, err := normalizeExport(q, r, old); err == nil {
+		t.Fatal("existing target IQN replacement accepted")
+	}
+}
+func TestSnapshotTotalUsesRegisteredTrees(t *testing.T) {
+	output := "tank/backup-center/repos/alpha@bc-one\ntank/backup-center/repos/alpha/child@external\ntank/backup-center/repos/other@bc-two\ntank/backup-center/repos/alphabeta@bc-three\n"
+	r := &fakeRunner{fn: func(_ string, _ []string) (string, error) { return output, nil }}
+	a := testApp(t, r)
+	repo := Repository{Name: "alpha", Dataset: "tank/backup-center/repos/alpha", Kind: "filesystem"}
+	if err := a.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	n, msg := a.snapshotCount(context.Background())
+	if msg != "" || n == nil || *n != 2 {
+		t.Fatalf("incorrect total %v %s", n, msg)
+	}
+	output = "unparseable"
+	if n, msg = a.snapshotCount(context.Background()); n != nil || msg == "" {
+		t.Fatal("invalid count shown as zero")
+	}
+}
+func TestHistoryPaginationAndLiteralFiltering(t *testing.T) {
+	a := testApp(t, &fakeRunner{})
+	token, csrf := sessionFor(t, a, "admin")
+	jobs := make([]Job, 325)
+	for i := range jobs {
+		jobs[i] = Job{Kind: "snapshot.create", Target: fmt.Sprintf("repo-%03d", i), Status: "succeeded"}
+	}
+	jobs[324].Target = "percent%_literal"
+	if err := a.DB.Create(&jobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	h := a.Handler()
+	w := request(t, h, "GET", "/api/jobs?page=2&page_size=10", "", token, csrf)
+	var page struct {
+		Items []Job `json:"items"`
+		Total int64 `json:"total"`
+		Page  int   `json:"page"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || page.Total != 325 || len(page.Items) != 10 || page.Page != 2 || page.Items[0].ID != 315 {
+		t.Fatalf("bad page: %s", w.Body)
+	}
+	w = request(t, h, "GET", "/api/jobs?page=1&page_size=10&q=%25_", "", token, csrf)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || page.Total != 1 {
+		t.Fatalf("wildcards were not literal: %s", w.Body)
+	}
+	for _, path := range []string{"/api/jobs?page=0", "/api/jobs?page=1&page_size=101", "/api/audit?page=-1"} {
+		if res := request(t, h, "GET", path, "", token, csrf); res.Code != 400 {
+			t.Fatalf("accepted invalid pagination %s: %s", path, res.Body)
+		}
+	}
+	var legacy []Job
+	w = request(t, h, "GET", "/api/jobs", "", token, csrf)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &legacy) != nil || len(legacy) != 300 {
+		t.Fatal("legacy API response changed")
+	}
+}

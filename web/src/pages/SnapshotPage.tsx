@@ -1,3 +1,4 @@
+import { useRepositoryFilter } from "../navigation";
 import React, { useState } from "react";
 import { Button, Modal, Select, Tag } from "@arco-design/web-react";
 import { IconCamera } from "@arco-design/web-react/icon";
@@ -17,11 +18,12 @@ export default function SnapshotPage({
   snaps: { data: Row[] | null; error: string };
   browse: (s: Row) => void;
 }) {
-  const [filter, setFilter] = useState<number | undefined>();
+  const [filter, setFilter] = useRepositoryFilter();
   return (
     <>
       <div className="section-toolbar">
         <Select
+          aria-label="按仓库筛选快照"
           placeholder="全部仓库"
           allowClear
           value={filter}
@@ -115,6 +117,11 @@ export default function SnapshotPage({
       <DataTable
         rows={
           snaps.data?.filter((s) => !filter || s.repository_id === filter) || []
+        }
+        tableName="快照"
+        filterKey={String(filter)}
+        searchText={(s) =>
+          `${repos?.find((r) => r.repository.id === s.repository_id)?.repository.name || ""} ${s.holds > 0 ? "已保护" : "常规保留"}`
         }
         rowKey="name"
         columns={[

@@ -413,3 +413,41 @@ func (a *App) action(ctx context.Context, kind string, q ActionRequest) (string,
 	}
 	return q.Snapshot, err
 }
+
+// Count only registered repository trees; unrelated snapshots are not backup points.
+func (a *App) snapshotCount(ctx context.Context) (*int, string) {
+	var repos []Repository
+	if err := a.DB.Find(&repos).Error; err != nil {
+		return nil, err.Error()
+	}
+	count := 0
+	if len(repos) == 0 {
+		return &count, ""
+	}
+	names := map[string]bool{}
+	for _, r := range repos {
+		names[r.Dataset] = true
+	}
+	out, err := a.zfs(ctx, "list", "-H", "-r", "-t", "snapshot", "-o", "name", a.root+"/repos")
+	if err != nil {
+		return nil, err.Error()
+	}
+	for _, line := range strings.Fields(out) {
+		ds, _, ok := strings.Cut(line, "@")
+		if !ok {
+			return nil, "快照计数返回格式无效"
+		}
+		for strings.HasPrefix(ds, a.root+"/repos/") {
+			if names[ds] {
+				count++
+				break
+			}
+			cut := strings.LastIndex(ds, "/")
+			if cut < 0 {
+				break
+			}
+			ds = ds[:cut]
+		}
+	}
+	return &count, ""
+}

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -9,6 +9,7 @@ import {
   Select,
   Switch,
   Table,
+  Pagination,
   Tag,
   Message,
   Spin,
@@ -215,24 +216,139 @@ export function DataTable({
   columns,
   loading = false,
   rowKey = "id",
+  tableName = "记录",
+  searchText,
+  endpoint,
+  revision = 0,
+  filterKey,
 }: {
   rows: any[] | null;
   columns: any[];
   loading?: boolean;
   rowKey?: string;
+  tableName?: string;
+  searchText?: (row: Row) => string;
+  endpoint?: string;
+  revision?: number;
+  filterKey?: string;
 }) {
+  const [keyword, setKeyword] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState(10);
+  useEffect(() => setPage(1), [filterKey]);
+  const [remote, setRemote] = useState<{ items: Row[]; total: number } | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(keyword.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [keyword]);
+  useEffect(() => {
+    if (!endpoint) return;
+    let active = true;
+    setBusy(true);
+    const q = new URLSearchParams({
+      page: String(page),
+      page_size: String(size),
+      q: query,
+    });
+    api(endpoint + "?" + q)
+      .then((data) => {
+        if (!active) return;
+        const result = Array.isArray(data)
+          ? { items: data, total: data.length }
+          : data;
+        setRemote(result);
+        setError("");
+        const last = Math.max(1, Math.ceil(result.total / size));
+        if (page > last) setPage(last);
+      })
+      .catch((e) => {
+        if (active) setError(e.message);
+      })
+      .finally(() => {
+        if (active) setBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [endpoint, revision, page, size, query]);
+  const filtered = useMemo(() => {
+    if (endpoint) return remote?.items || [];
+    const term = keyword.trim().toLocaleLowerCase();
+    return (rows || []).filter(
+      (r) =>
+        !term ||
+        (JSON.stringify(r) + " " + (searchText?.(r) || ""))
+          .toLocaleLowerCase()
+          .includes(term),
+    );
+  }, [rows, keyword, searchText, endpoint, remote]);
+  const total = endpoint ? remote?.total || 0 : filtered.length;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const current = Math.min(page, pages);
+  useEffect(() => {
+    if (!endpoint && page > pages) setPage(pages);
+  }, [endpoint, page, pages]);
   return (
-    <Table
-      rowKey={rowKey}
-      data={rows || []}
-      columns={columns}
-      loading={loading || rows === null}
-      pagination={
-        (rows?.length || 0) > 12 ? { pageSize: 12, showTotal: true } : false
-      }
-      noDataElement={<div className="empty">暂无记录</div>}
-      scroll={{ x: 900 }}
-    />
+    <div className="data-table" aria-label={tableName + "表格"}>
+      <div className="table-tools">
+        <Input.Search
+          aria-label={"筛选" + tableName}
+          placeholder="输入关键词筛选"
+          allowClear
+          value={keyword}
+          onChange={(v) => {
+            setKeyword(v);
+            setPage(1);
+          }}
+          style={{ width: 300, maxWidth: "100%" }}
+        />
+      </div>
+      <ErrorBox error={error} />
+      <Table
+        rowKey={rowKey}
+        data={
+          endpoint
+            ? filtered
+            : filtered.slice((current - 1) * size, current * size)
+        }
+        columns={columns}
+        loading={loading || (endpoint ? busy : rows === null)}
+        pagination={false}
+        noDataElement={
+          <div className="empty">{keyword ? "没有匹配的记录" : "暂无记录"}</div>
+        }
+        scroll={{ x: 900 }}
+      />
+      <div className="table-footer">
+        <span role="status">
+          共 {total} 条
+          {!endpoint && keyword && rows ? `（筛选前 ${rows.length} 条）` : ""} ·
+          第 {current} / {pages} 页
+        </span>
+        <Pagination
+          current={current}
+          total={total}
+          pageSize={size}
+          hideOnSinglePage={false}
+          showJumper
+          sizeCanChange
+          sizeOptions={[10, 20, 50, 100]}
+          onChange={(p, s) => {
+            setPage(s !== size ? 1 : p);
+            setSize(s);
+          }}
+          onPageSizeChange={(s) => {
+            setSize(s);
+            setPage(1);
+          }}
+        />
+      </div>
+    </div>
   );
 }
 export function Chart({ data }: { data: any[] | null }) {

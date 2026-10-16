@@ -35,7 +35,6 @@ export default function Monitor({
   refresh,
 }: Pick<Tools, "rev" | "admin" | "perform" | "refresh">) {
   const d = useData("/monitor", rev);
-  const alerts = useData<Row[]>("/alerts", rev);
   const [hours, setHours] = useState(24);
   const metrics = useData<Row[]>("/metrics?hours=" + hours, rev);
   const last = metrics.data?.at(-1);
@@ -84,7 +83,10 @@ export default function Monitor({
       <section>
         <h2>告警事件</h2>
         <DataTable
-          rows={alerts.data}
+          rows={null}
+          endpoint="/alerts"
+          revision={rev}
+          tableName="告警"
           columns={[
             {
               title: "级别",

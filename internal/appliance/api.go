@@ -73,12 +73,7 @@ func (a *App) Handler() http.Handler {
 	api.GET("/ssh", admin, a.sshInfo)
 	api.POST("/ssh/trust", admin, a.trustHost)
 	api.GET("/jobs", func(c *gin.Context) {
-		var rows []Job
-		if err := a.DB.Order("id desc").Limit(300).Find(&rows).Error; err != nil {
-			failure(c, 500, err)
-			return
-		}
-		c.JSON(200, rows)
+		pagedList[Job](c, a.DB.Model(&Job{}).Order("id desc"), []string{"kind", "target", "status", "error", "result"}, 300)
 	})
 	api.GET("/jobs/:id", func(c *gin.Context) {
 		id, e := paramID(c)
@@ -93,9 +88,7 @@ func (a *App) Handler() http.Handler {
 		c.JSON(200, j)
 	})
 	api.GET("/audit", admin, func(c *gin.Context) {
-		var rows []Audit
-		a.DB.Order("id desc").Limit(1000).Find(&rows)
-		c.JSON(200, rows)
+		pagedList[Audit](c, a.DB.Model(&Audit{}).Order("id desc"), []string{"username", "action", "target", "detail", "ip"}, 1000)
 	})
 	api.GET("/monitor", a.monitorInfo)
 	api.GET("/metrics", func(c *gin.Context) {
@@ -109,9 +102,7 @@ func (a *App) Handler() http.Handler {
 	})
 	api.GET("/events", a.events)
 	api.GET("/alerts", func(c *gin.Context) {
-		var rows []Alert
-		a.DB.Order("active desc, updated_at desc").Limit(300).Find(&rows)
-		c.JSON(200, rows)
+		pagedList[Alert](c, a.DB.Model(&Alert{}).Order("active desc, updated_at desc"), []string{"key", "message", "severity"}, 300)
 	})
 	api.POST("/alerts/:id/ack", func(c *gin.Context) {
 		id, err := paramID(c)
@@ -313,7 +304,8 @@ func (a *App) overview(c *gin.Context) {
 	a.DB.Model(&Alert{}).Where("active = ? AND acknowledged = ?", true, false).Count(&na)
 	var recent []Job
 	a.DB.Order("id desc").Limit(12).Find(&recent)
-	c.JSON(200, gin.H{"pools": p, "storage_error": msg, "repositories": nr, "active_jobs": nj, "alerts": na, "recent_jobs": recent, "version": Version, "time": time.Now()})
+	ns, snapshotErr := a.snapshotCount(c.Request.Context())
+	c.JSON(200, gin.H{"snapshots": ns, "snapshot_error": snapshotErr, "pools": p, "storage_error": msg, "repositories": nr, "active_jobs": nj, "alerts": na, "recent_jobs": recent, "version": Version, "time": time.Now()})
 }
 func (a *App) monitorInfo(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)

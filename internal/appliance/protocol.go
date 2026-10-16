@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"gorm.io/gorm"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 )
 
 // Access protocol belongs to the repository type, never to user selection.
-func normalizeExport(e Export, r Repository) (Export, error) {
+func normalizeExport(e Export, r Repository, existingIQN ...string) (Export, error) {
 	protocol := "nfs"
 	if r.Kind == "volume" {
 		protocol = "iscsi"
@@ -28,11 +29,23 @@ func normalizeExport(e Export, r Repository) (Export, error) {
 	} else {
 		e.Clients = ""
 		e.ReadOnly = false
-		if e.IQN == "" {
-			e.IQN = fmt.Sprintf("iqn.2026-10.local.backup-center:repo-%d-%s", r.ID, strings.ToLower(strings.ReplaceAll(r.Name, "_", "-")))
+		iqn := fmt.Sprintf("iqn.2026-10.local.backup-center:repo-%d-%s", r.ID, strings.ToLower(strings.ReplaceAll(r.Name, "_", "-")))
+		if len(existingIQN) > 0 && existingIQN[0] != "" {
+			iqn = existingIQN[0]
 		}
+		if e.IQN != "" && e.IQN != iqn {
+			return e, errors.New("目标端 IQN 由平台生成，不能自行填写或修改")
+		}
+		e.IQN = iqn
 	}
 	return e, validateExport(e, r)
+}
+func (a *App) prepareExport(e Export, r Repository) (Export, error) {
+	var old Export
+	if err := a.DB.First(&old, "repository_id = ?", r.ID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return e, err
+	}
+	return normalizeExport(e, r, old.IQN)
 }
 func validateExport(e Export, r Repository) error {
 	if e.Protocol == "nfs" {
@@ -112,7 +125,7 @@ func (a *App) applyExport(ctx context.Context, e Export) error {
 	if err = a.owned(ctx, r.Dataset); err != nil {
 		return err
 	}
-	if e, err = normalizeExport(e, r); err != nil {
+	if e, err = a.prepareExport(e, r); err != nil {
 		return err
 	}
 	var old Export

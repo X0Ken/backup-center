@@ -14,7 +14,7 @@ export default function System({
 }: Omit<Tools, "perform" | "repos">) {
   const info = useData("/system", rev);
   const users = useData<Row[]>(admin ? "/users" : "/auth/me", rev);
-  const audit = useData<Row[]>(admin ? "/audit" : "/jobs", rev);
+
   function account(u?: Row) {
     form(
       u ? "编辑用户" : "创建用户",
@@ -342,7 +342,10 @@ export default function System({
           <section>
             <h2>操作审计</h2>
             <DataTable
-              rows={audit.data}
+              rows={null}
+              endpoint="/audit"
+              revision={rev}
+              tableName="操作审计"
               columns={[
                 { title: "时间", dataIndex: "created_at", render: date },
                 {

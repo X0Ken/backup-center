@@ -61,7 +61,7 @@ test("snapshot, policy, access, audit and disks follow the repository model", as
         { id: 2, action: "auth.login.failed", detail: "", username: "tester" },
       ],
       "/system": {
-        version: "1.1.0",
+        version: "1.2.0",
         network: "[]",
         disks: [
           {
@@ -142,6 +142,10 @@ test("snapshot, policy, access, audit and disks follow the repository model", as
   expect(writes.at(-1)?.body.repository_id).toBe(102);
   expect(writes.at(-1)?.body.clients).toBeUndefined();
   expect(writes.at(-1)?.body.protocol).toBeUndefined();
+  expect(writes.at(-1)?.body.iqn).toBeUndefined();
+  await expect(
+    page.getByLabel("目标端 IQN（可选）", { exact: true }),
+  ).toHaveCount(0);
 
   await page.locator("nav").getByText("备份仓库", { exact: true }).click();
   await page.getByRole("button", { name: "创建仓库", exact: true }).click();
@@ -166,4 +170,120 @@ test("snapshot, policy, access, audit and disks follow the repository model", as
   ).toBeVisible();
   await expect(page.getByText("登录失败", { exact: true })).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("repository shortcuts preserve filters, pagination totals and fixed policy ownership", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(10000);
+  const writes: any[] = [];
+  const repositories = Array.from({ length: 25 }, (_, i) => ({
+    repository: {
+      id: i + 1,
+      name: `repo-${String(i + 1).padStart(2, "0")}`,
+      kind: "filesystem",
+    },
+    storage: { encryption: "off", compression: "lz4", key_status: "available" },
+    policy: {
+      id: i + 1,
+      repository_id: i + 1,
+      keep_hourly: 7,
+      keep_daily: 14,
+      keep_weekly: 0,
+      keep_monthly: 0,
+      keep_yearly: 0,
+      enabled: true,
+    },
+  }));
+  const snapshots = repositories.flatMap((r) =>
+    [1, 2].map((n) => ({
+      repository_id: r.repository.id,
+      name: `tank/${r.repository.name}@bc-${n}`,
+      created_at: "2026-10-16T01:00:00Z",
+      clones: "-",
+      holds: 0,
+    })),
+  );
+  await page.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname.replace("/api", "");
+    if (path === "/events") {
+      await route.abort();
+      return;
+    }
+    if (route.request().method() !== "GET") {
+      writes.push(route.request().postDataJSON());
+      await route.fulfill({ json: { id: 1 } });
+      return;
+    }
+    const payload: Record<string, any> = {
+      "/auth/me": {
+        user: { id: 1, username: "tester", role: "admin", must_change: false },
+        csrf: "csrf",
+      },
+      "/repositories": repositories,
+      "/snapshots": snapshots,
+      "/policies": repositories.map((r) => ({
+        ...r.policy,
+        schedule_label: "每小时整点",
+        timezone: "Asia/Shanghai",
+      })),
+      "/overview": {
+        snapshots: 50,
+        repositories: 25,
+        pools: [],
+        recent_jobs: [],
+      },
+    };
+    await route.fulfill({ json: payload[path] || [] });
+  });
+  await page.goto("/#overview");
+  await expect(
+    page
+      .locator(".stat-card")
+      .filter({ hasText: "快照总数" })
+      .locator("strong"),
+  ).toHaveText("50");
+  await page.locator("nav").getByText("备份仓库", { exact: true }).click();
+  const table = page.getByLabel("仓库表格", { exact: true });
+  await expect(table.getByRole("status")).toHaveText("共 25 条 · 第 1 / 3 页");
+  await expect(table.locator("tbody tr")).toHaveCount(10);
+  await table.locator(".arco-pagination-item-next").click();
+  await expect(table.getByRole("status")).toHaveText("共 25 条 · 第 2 / 3 页");
+  await page.getByLabel("筛选仓库", { exact: true }).fill("repo-24");
+  await expect(table.getByRole("status")).toHaveText(
+    "共 1 条（筛选前 25 条） · 第 1 / 1 页",
+  );
+  const row = table.locator("tbody tr");
+  await expect(row.getByRole("button")).toHaveCount(3);
+  await row.getByRole("button", { name: "更多操作", exact: true }).click();
+  await page.getByRole("button", { name: "编辑备份策略", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "编辑快照策略" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("小时级恢复点", { exact: true })).toHaveValue(
+    "7",
+  );
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  expect(writes.at(-1).repository_id).toBe(24);
+  await page.getByRole("heading", { name: "备份仓库", exact: true }).click();
+  await row.getByRole("button", { name: "查看快照", exact: true }).click();
+  await expect(page).toHaveURL(/#snapshots\?repository_id=24$/);
+  const snaps = page.getByLabel("快照表格", { exact: true });
+  await expect(snaps.getByRole("status")).toHaveText("共 2 条 · 第 1 / 1 页");
+  await expect(snaps.locator("tbody tr")).toHaveCount(2);
+  await expect(snaps.locator("tbody")).toContainText("repo-24@bc-");
+  await page.evaluate(() => {
+    location.hash = "snapshots?repository_id=25";
+  });
+  await expect(snaps.locator("tbody")).toContainText("repo-25@bc-");
+  await expect(snaps.locator("tbody")).not.toContainText("repo-24@bc-");
+  await page.reload();
+  await expect(snaps.getByRole("status")).toHaveText("共 2 条 · 第 1 / 1 页");
+  await page.evaluate(() => {
+    location.hash = "policies?repository_id=24";
+  });
+  await expect(
+    page.getByLabel("快照策略表格", { exact: true }).getByRole("status"),
+  ).toHaveText("共 1 条 · 第 1 / 1 页");
 });

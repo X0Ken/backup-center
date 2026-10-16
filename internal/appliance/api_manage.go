@@ -94,7 +94,7 @@ func (a *App) saveExport(c *gin.Context) {
 		failure(c, 404, e)
 		return
 	}
-	if q, e = normalizeExport(q, r); e != nil {
+	if q, e = a.prepareExport(q, r); e != nil {
 		failure(c, 400, e)
 		return
 	}

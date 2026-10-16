@@ -9,6 +9,8 @@
 - 文件仓库与 zvol 块卷、压缩、文件仓库配额、原生 AES-256-GCM 加密及密钥加载/卸载。
 - 手动/递归/定时快照，小时/天/周/月/年分层保留，清理预览、显式保护、克隆和复制基线保护。使用 ZFS `createtxg` 区分同一秒内的快照，保护最新恢复点。
 - 克隆恢复、快照文件浏览/下载、最新快照原地回滚、空间差异比较 API、完整恢复任务记录。
+- 仓库、快照、策略和共享访问列表支持关键词筛选与分页，表格显示总数、页码、页大小和跳转工具；仓库行提供策略编辑与快照筛选快捷入口。
+- 概览显示注册仓库的实际快照总数；iSCSI 目标端 IQN 由平台生成并固定，已有目标保留原 IQN。
 - NFS IP/CIDR 白名单、同步写入、root_squash、只读导出；iSCSI Target、LUN、显式 initiator ACL、会话查看。
 - SSH 全量/增量 ZFS 复制、严格主机指纹验证、断点续传和接收端快照 GUID 校验。
 - 池健康、SMART、容量历史、ARC 命中率、IOPS/吞吐量、容量与复制延迟告警、HTTPS Webhook 和 STARTTLS 邮件通知。
@@ -143,3 +145,8 @@ BC_TEST_MUTATION=1 npm test
 测试只有在明确设置 `BC_TEST_MUTATION=1` 时，才通过界面创建并删除专属验收仓库。日常修改请同时运行 Go 测试、竞态检测、`go vet` 和前端生产构建；协议、复制和恢复逻辑的变更还应执行真实设备验收。
 
 GitHub Actions 模板见 `deploy/github-actions-check.yml`；具备 workflow 写入权限后，可将其放入 `.github/workflows/check.yml` 启用云端检查。
+
+
+两台客户端共享访问验收使用 `scripts/verify-shared-access.py --run`：通过 `--url`、`--certificate`、`--username` 和 `--password-file` 指定平台；通过 `--clients`、`--client-addresses`、`--storage-address`、`--ssh-user`、`--ssh-password-file` 和 `--ssh-known-hosts` 指定两台 SSH 客户端、其存储网络 IP、平台存储地址和受保护的登录凭证/主机公钥文件。客户端需安装 `nfs-utils` 和 `iscsi-initiator-utils`、启动 `iscsid`，且 SSH 账号可免交互 sudo。
+
+该验收始终保留唯一命名的四个仓库、受保护快照、白名单访问配置、客户端挂载和校验文件，并将位置与 SHA-256 输出到终端。每个客户端使用独立的 iSCSI 测试卷，只对该测试目标映射出的全新、空白且容量匹配的 512 MiB LUN 创建文件系统。NFS 验收覆盖双端写入和互读、快照克隆挂载及只读限制；iSCSI 验收覆盖文件写入、卸载快照、注销/重新登录及内容校验。客户端挂载保留到卸载或客户端重启，数据和平台访问配置持久保存。

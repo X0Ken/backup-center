@@ -29,12 +29,13 @@ import {
 } from "../components";
 import { Tools, repoOptions, kindLabels } from "../types";
 export default function Jobs({ rev }: { rev: number }) {
-  const d = useData<Row[]>("/jobs", rev);
   return (
     <>
-      <ErrorBox error={d.error} />
       <DataTable
-        rows={d.data}
+        rows={null}
+        endpoint="/jobs"
+        revision={rev}
+        tableName="任务"
         columns={[
           { title: "#", dataIndex: "id", width: 70 },
           {

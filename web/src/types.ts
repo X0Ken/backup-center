@@ -28,6 +28,8 @@ export const kindLabels: Row = {
   "snapshot.create": "创建快照",
   "snapshot.scheduled": "策略快照",
   "snapshot.delete": "删除快照",
+  "snapshot.hold": "保护快照",
+  "snapshot.release": "解除快照保护",
   "restore.clone": "基于快照创建仓库",
   "restore.rollback": "原地回滚",
   "export.apply": "设置共享访问",

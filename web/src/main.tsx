@@ -1,3 +1,4 @@
+import { currentPage } from "./navigation";
 import Policies from "./pages/Policies";
 import Repositories from "./pages/Repositories";
 import Login from "./Login";
@@ -72,10 +73,7 @@ const nav = [
 function App() {
   const { user, set } = useAuth();
   const [checking, setChecking] = useState(true);
-  const [page, setPage] = useState(
-    (location.hash === "#restore" ? "snapshots" : location.hash.slice(1)) ||
-      "overview",
-  );
+  const [page, setPage] = useState(currentPage);
   const [rev, setRev] = useState(0);
   const [dialog, setDialog] = useState<{
     title: string;
@@ -95,11 +93,7 @@ function App() {
       .finally(() => setChecking(false));
   }, []);
   useEffect(() => {
-    const onHash = () =>
-      setPage(
-        (location.hash === "#restore" ? "snapshots" : location.hash.slice(1)) ||
-          "overview",
-      );
+    const onHash = () => setPage(currentPage());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -348,7 +342,7 @@ function App() {
         <footer>
           <span>Backup Center</span>
           <span>独立备份 · 定期验证 · 从容恢复</span>
-          <span>v{overview.data?.version || "1.1.0"}</span>
+          <span>v{overview.data?.version || "1.2.0"}</span>
         </footer>
       </div>
       {dialog && (

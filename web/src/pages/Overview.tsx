@@ -46,10 +46,11 @@ export default function Overview({
   const percent = size ? (used / size) * 100 : 0;
   return (
     <>
-      <ErrorBox error={error || data?.storage_error} />
+      <ErrorBox error={error || data?.storage_error || data?.snapshot_error} />
       <div className="stat-grid">
         {[
           ["备份仓库", data?.repositories ?? "—", "独立保护空间", IconStorage],
+          ["快照总数", data?.snapshots ?? "—", "所有仓库的恢复点", IconCamera],
           [
             "运行中的任务",
             data?.active_jobs ?? "—",

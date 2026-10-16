@@ -1,8 +1,88 @@
+import { useRepositoryFilter } from "../navigation";
 import React from "react";
-import { Alert, Button, Message, Modal, Tag } from "@arco-design/web-react";
+import {
+  Alert,
+  Button,
+  Message,
+  Modal,
+  Select,
+  Tag,
+} from "@arco-design/web-react";
 import { api, date } from "../api";
 import { DataTable, ErrorBox, Row, useData } from "../components";
 import { Tools, repoOptions } from "../types";
+export function editPolicy(
+  form: Tools["form"],
+  repos: Row[] | null,
+  refresh: () => void,
+  r?: Row,
+  repositoryID?: number,
+) {
+  form(
+    r ? "编辑快照策略" : "添加快照策略",
+    [
+      {
+        key: "repository_id",
+        label: "仓库",
+        type: "select",
+        options: repoOptions(repos),
+        disabled: !!r || !!repositoryID,
+        required: true,
+        value: r?.repository_id ?? repositoryID,
+      },
+      {
+        key: "keep_hourly",
+        label: "小时级恢复点",
+        type: "number",
+        value: r?.keep_hourly ?? 24,
+      },
+      {
+        key: "keep_daily",
+        label: "天级恢复点",
+        type: "number",
+        value: r?.keep_daily ?? 30,
+      },
+      {
+        key: "keep_weekly",
+        label: "周级恢复点",
+        type: "number",
+        value: r?.keep_weekly ?? 12,
+      },
+      {
+        key: "keep_monthly",
+        label: "月级恢复点",
+        type: "number",
+        value: r?.keep_monthly ?? 12,
+      },
+      {
+        key: "keep_yearly",
+        label: "年度恢复点",
+        help: (v) =>
+          `自动快照频率：${v.keep_hourly > 0 ? "每小时整点" : v.keep_daily > 0 ? "每天零点" : v.keep_weekly > 0 ? "每周一零点" : v.keep_monthly > 0 ? "每月 1 日零点" : v.keep_yearly > 0 ? "每年 1 月 1 日零点" : "请至少启用一个保留层级"}（服务器时区）`,
+        type: "number",
+        value: r?.keep_yearly ?? 3,
+      },
+      {
+        key: "recursive",
+        label: "包含子数据集",
+        type: "switch",
+        value: r?.recursive ?? false,
+      },
+      {
+        key: "enabled",
+        label: "启用自动快照",
+        type: "switch",
+        value: r?.enabled ?? true,
+      },
+    ],
+    async (v) => {
+      await api("/policies", "PUT", v);
+      Message.success("策略已保存");
+      refresh();
+    },
+  );
+}
+
 export default function Policies({
   repos,
   rev,
@@ -11,84 +91,32 @@ export default function Policies({
   perform,
   refresh,
 }: Omit<Tools, "showText">) {
+  const [repositoryFilter, setRepositoryFilter] = useRepositoryFilter();
   const policies = useData<Row[]>("/policies", rev);
   function policy(r?: Row) {
-    form(
-      r ? "编辑快照策略" : "添加快照策略",
-      [
-        {
-          key: "repository_id",
-          label: "仓库",
-          type: "select",
-          options: repoOptions(
-            repos?.filter((x) =>
-              r
-                ? x.repository.id === r.repository_id
-                : !policies.data?.some(
-                    (p) => p.repository_id === x.repository.id,
-                  ),
-            ) || [],
-          ),
-          disabled: !!r,
-          required: true,
-          value: r?.repository_id,
-        },
-        {
-          key: "keep_hourly",
-          label: "小时级恢复点",
-          type: "number",
-          value: r?.keep_hourly ?? 24,
-        },
-        {
-          key: "keep_daily",
-          label: "天级恢复点",
-          type: "number",
-          value: r?.keep_daily ?? 30,
-        },
-        {
-          key: "keep_weekly",
-          label: "周级恢复点",
-          type: "number",
-          value: r?.keep_weekly ?? 12,
-        },
-        {
-          key: "keep_monthly",
-          label: "月级恢复点",
-          type: "number",
-          value: r?.keep_monthly ?? 12,
-        },
-        {
-          key: "keep_yearly",
-          label: "年度恢复点",
-          help: (v) =>
-            `自动快照频率：${v.keep_hourly > 0 ? "每小时整点" : v.keep_daily > 0 ? "每天零点" : v.keep_weekly > 0 ? "每周一零点" : v.keep_monthly > 0 ? "每月 1 日零点" : v.keep_yearly > 0 ? "每年 1 月 1 日零点" : "请至少启用一个保留层级"}（服务器时区）`,
-          type: "number",
-          value: r?.keep_yearly ?? 3,
-        },
-        {
-          key: "recursive",
-          label: "包含子数据集",
-          type: "switch",
-          value: r?.recursive ?? false,
-        },
-        {
-          key: "enabled",
-          label: "启用自动快照",
-          type: "switch",
-          value: r?.enabled ?? true,
-        },
-      ],
-      async (v) => {
-        await api("/policies", "PUT", v);
-        Message.success("策略已保存");
-        refresh();
-      },
+    editPolicy(
+      form,
+      repos?.filter((x) =>
+        r
+          ? x.repository.id === r.repository_id
+          : !policies.data?.some((p) => p.repository_id === x.repository.id),
+      ) || [],
+      refresh,
+      r,
     );
   }
   return (
     <>
       <div className="section-toolbar">
-        <span>每个仓库一条策略</span>
+        <Select
+          aria-label="按仓库筛选策略"
+          placeholder="全部仓库"
+          allowClear
+          value={repositoryFilter}
+          onChange={setRepositoryFilter}
+          options={repoOptions(repos)}
+          style={{ width: 240 }}
+        />
         {admin && (
           <Button
             type="primary"
@@ -116,7 +144,16 @@ export default function Policies({
           </span>
         </div>
         <DataTable
-          rows={policies.data}
+          rows={
+            policies.data?.filter(
+              (p) => !repositoryFilter || p.repository_id === repositoryFilter,
+            ) || null
+          }
+          tableName="快照策略"
+          filterKey={String(repositoryFilter)}
+          searchText={(p) =>
+            `${repos?.find((r) => r.repository.id === p.repository_id)?.repository.name || ""} ${p.enabled ? "已启用" : "已暂停"}`
+          }
           columns={[
             {
               title: "仓库",

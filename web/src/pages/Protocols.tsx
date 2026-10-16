@@ -57,20 +57,13 @@ export default function Protocols({
           help: "NFS 使用同步写入和 root_squash。查看快照内容时建议启用只读。",
         },
         {
-          key: "iqn",
-          label: "目标端 IQN（可选）",
-          value: row?.iqn || "",
-          visible: iscsi,
-          help: "留空按仓库名称自动生成；访问启用后不能修改。",
-        },
-        {
           key: "initiators",
           label: "允许访问的客户端 IQN",
           type: "textarea",
           required: true,
           value: row?.initiators || "",
           visible: iscsi,
-          help: "多个 IQN 以空格分隔。请使用隔离的存储网络；同一普通文件系统只允许一个写入端。",
+          help: "目标端 IQN 由平台自动生成，不能手动填写。多个客户端 IQN 以空格分隔。请使用隔离的存储网络；同一普通文件系统只允许一个写入端。",
         },
         {
           key: "enabled",
@@ -104,6 +97,11 @@ export default function Protocols({
       <ErrorBox error={data.error} />
       <DataTable
         rows={data.data}
+        tableName="共享访问"
+        searchText={(r) =>
+          repos?.find((x) => x.repository.id === r.repository_id)?.repository
+            .name || ""
+        }
         columns={[
           {
             title: "仓库",
@@ -114,8 +112,13 @@ export default function Protocols({
           {
             title: "访问方式",
             dataIndex: "protocol",
-            render: (v: string) => (
-              <Tag color="arcoblue">{v.toUpperCase()}</Tag>
+            render: (v: string, r: Row) => (
+              <span>
+                <Tag color="arcoblue">{v.toUpperCase()}</Tag>
+                {v === "iscsi" && (
+                  <small className="cell-sub">目标端 IQN：{r.iqn}</small>
+                )}
+              </span>
             ),
           },
           {
