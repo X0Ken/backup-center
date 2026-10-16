@@ -751,3 +751,6 @@ footer {
 .table-footer { display:flex; flex-wrap:wrap; gap:12px; justify-content:space-between; align-items:center; margin-top:16px; color:#667085; }
 .repository-more { display:flex; flex-direction:column; align-items:stretch; padding:6px; min-width:150px; background:white; border:1px solid #e6ebf2; border-radius:8px; box-shadow:0 8px 24px #1525361a; }
 .repository-more .arco-btn { text-align:left; }
+
+.sync-browser { margin:12px 0; padding:12px; border:1px solid #e6ebf2; border-radius:6px; }
+.sync-directories { display:flex; flex-wrap:wrap;gap:8px;max-height:200px;overflow:auto; }

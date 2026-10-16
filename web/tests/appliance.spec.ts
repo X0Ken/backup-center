@@ -24,6 +24,7 @@ test("HTTPS login, all workspaces, real UI repository creation and snapshot", as
   ).toBeVisible();
   for (const label of [
     "备份仓库",
+    "数据同步",
     "快照",
     "共享访问",
     "快照策略",

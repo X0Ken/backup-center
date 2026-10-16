@@ -41,6 +41,9 @@ func normalizeExport(e Export, r Repository, existingIQN ...string) (Export, err
 	return e, validateExport(e, r)
 }
 func (a *App) prepareExport(e Export, r Repository) (Export, error) {
+	if a.syncBound(r.ID) && e.Enabled && !e.ReadOnly {
+		return e, errors.New("数据同步仓库只允许只读共享访问")
+	}
 	var old Export
 	if err := a.DB.First(&old, "repository_id = ?", r.ID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return e, err

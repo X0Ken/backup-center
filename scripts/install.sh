@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v zfs >/dev/null
 zpool list -H backup-pool >/dev/null
-for cmd in nginx exportfs targetcli smartctl; do command -v "$cmd" >/dev/null || { echo "Missing dependency: $cmd" >&2; exit 1; }; done
+for cmd in nginx exportfs targetcli smartctl rsync rclone sshpass; do command -v "$cmd" >/dev/null || { echo "Missing dependency: $cmd" >&2; exit 1; }; done
 install -d -m 0755 /opt/backup-center /opt/backup-center/web /etc/backup-center /etc/exports.d /etc/target
 install -d -m 0700 /var/lib/backup-center /etc/backup-center/tls
 if [[ -f /opt/backup-center/backupd ]]; then cp -a /opt/backup-center/backupd /opt/backup-center/backupd.previous; fi

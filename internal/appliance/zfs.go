@@ -278,9 +278,19 @@ func (a *App) createRepo(ctx context.Context, q RepoRequest) (string, error) {
 	return r.Dataset, nil
 }
 func (a *App) createSnapshot(ctx context.Context, q ActionRequest) (string, error) {
+	return a.createSnapshotMode(ctx, q, false)
+}
+func (a *App) createSnapshotMode(ctx context.Context, q ActionRequest, fromSync bool) (string, error) {
 	r, err := a.repo(q.RepositoryID)
 	if err != nil {
 		return "", err
+	}
+	if !fromSync && a.syncBusyRepo(r.ID) {
+		return "", errors.New("数据同步进行中，请等待本轮完成后创建快照")
+	}
+	var syncTask SyncTask
+	if a.DB.Where("repository_id = ?", r.ID).First(&syncTask).Error == nil && syncTask.CurrentGeneration == "" {
+		return "", errors.New("尚无成功同步版本，不能创建有效恢复点")
 	}
 	if err = a.owned(ctx, r.Dataset); err != nil {
 		return "", err
@@ -310,6 +320,11 @@ func (a *App) createSnapshot(ctx context.Context, q ActionRequest) (string, erro
 	if _, err = a.zfs(ctx, args...); err != nil {
 		return "", err
 	}
+	if syncTask.ID > 0 {
+		if err = a.DB.Model(&syncTask).Update("last_snapshot_generation", syncTask.CurrentGeneration).Error; err != nil {
+			return s, err
+		}
+	}
 	var reps []Replication
 	a.DB.Where("repository_id = ? AND enabled = ? AND after_snapshot = ?", r.ID, true, true).Find(&reps)
 	for _, rep := range reps {
@@ -326,6 +341,9 @@ func (a *App) action(ctx context.Context, kind string, q ActionRequest) (string,
 	}
 	if err = a.owned(ctx, r.Dataset); err != nil {
 		return "", err
+	}
+	if (kind == "repository.delete" || kind == "restore.rollback") && a.syncBound(r.ID) {
+		return "", errors.New("仓库已绑定数据同步，请先暂停并删除同步任务；恢复请基于快照创建新仓库")
 	}
 	if kind == "repository.delete" {
 		if q.Confirm != r.Name {

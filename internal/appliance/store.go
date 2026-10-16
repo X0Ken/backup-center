@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +37,10 @@ type App struct {
 	lock       *os.File
 	loginMu    sync.Mutex
 	attempts   map[string][]time.Time
+	syncMu     sync.Mutex
+	syncWake   chan struct{}
+	syncActive map[uint]context.CancelFunc
+	syncRepos  map[uint]bool
 }
 
 func Open(cfg Config, runner Runner) (*App, error) {
@@ -56,6 +61,17 @@ func Open(cfg Config, runner Runner) (*App, error) {
 		lock.Close()
 		return nil, errors.New("another backupd owns the data directory")
 	}
+	entries, e := os.ReadDir(cfg.DataDir)
+	if e != nil {
+		return nil, e
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), ".sync-runtime-") {
+			if e = os.RemoveAll(filepath.Join(cfg.DataDir, entry.Name())); e != nil {
+				return nil, e
+			}
+		}
+	}
 	dbpath := filepath.Join(cfg.DataDir, "backup-center.db")
 	db, err := gorm.Open(sqlite.Open(dbpath+"?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=10000&_synchronous=FULL"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
@@ -68,7 +84,7 @@ func Open(cfg Config, runner Runner) (*App, error) {
 		return nil, err
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err = db.AutoMigrate(&User{}, &Session{}, &Repository{}, &Policy{}, &Job{}, &Audit{}, &Export{}, &Replication{}, &Alert{}, &Metric{}, &Setting{}); err != nil {
+	if err = db.AutoMigrate(&User{}, &Session{}, &Repository{}, &Policy{}, &Job{}, &Audit{}, &Export{}, &Replication{}, &Alert{}, &Metric{}, &Setting{}, &SyncTask{}, &SyncRun{}); err != nil {
 		sqlDB.Close()
 		lock.Close()
 		return nil, err
@@ -77,8 +93,11 @@ func Open(cfg Config, runner Runner) (*App, error) {
 	if err = db.Model(&Job{}).Where("status = ?", "running").Updates(map[string]any{"status": "interrupted", "error": "服务重启中断任务；请核对真实资源状态后重新执行", "finished_at": now}).Error; err != nil {
 		return nil, err
 	}
+	if err = db.Model(&SyncRun{}).Where("status = ?", "running").Updates(map[string]any{"status": "interrupted", "phase": "interrupted", "error": "平台重启中断同步，最近发布版本保留", "finished_at": now}).Error; err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{DB: db, Run: runner, Config: cfg, root: cfg.Pool + "/backup-center", ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), policyWake: make(chan struct{}, 1), lock: lock, attempts: map[string][]time.Time{}}
+	a := &App{DB: db, Run: runner, Config: cfg, root: cfg.Pool + "/backup-center", ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), policyWake: make(chan struct{}, 1), lock: lock, syncWake: make(chan struct{}, 1), syncActive: map[uint]context.CancelFunc{}, syncRepos: map[uint]bool{}, attempts: map[string][]time.Time{}}
 	a.cron = cron.New(cron.WithLocation(time.Local), cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger), cron.Recover(cron.DefaultLogger)))
 	return a, nil
 }
@@ -87,10 +106,11 @@ func (a *App) Start() error {
 		return err
 	}
 	a.cron.Start()
-	a.wg.Add(3)
+	a.wg.Add(4)
 	go a.worker()
 	go a.monitor()
 	go a.policyScheduler()
+	go a.syncScheduler()
 	a.signal()
 	return nil
 }
@@ -170,7 +190,7 @@ func (a *App) worker() {
 				return
 			}
 			var j Job
-			if a.DB.Order("id").First(&j, "status = ?", "queued").Error != nil {
+			if a.DB.Order("id").First(&j, "status = ? AND kind <> ?", "queued", "sync.run").Error != nil {
 				break
 			}
 			now := time.Now()

@@ -287,3 +287,96 @@ test("repository shortcuts preserve filters, pagination totals and fixed policy 
     page.getByLabel("快照策略表格", { exact: true }).getByRole("status"),
   ).toHaveText("共 1 条 · 第 1 / 1 页");
 });
+
+test("unified data sync handles host trust and engine-specific credentials", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(10000);
+  const writes: any[] = [];
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace("/api", "");
+    if (path === "/events") {
+      await route.abort();
+      return;
+    }
+    const method = route.request().method();
+    if (method !== "GET") {
+      const body = route.request().postDataJSON();
+      writes.push({ path, body });
+      if (path === "/sync/probe")
+        await route.fulfill({
+          json: body.fingerprint
+            ? {
+                needs_trust: false,
+                fingerprint: body.fingerprint,
+                path: "/data",
+                parent: "/",
+                directories: [],
+                engine: "rclone",
+              }
+            : { needs_trust: true, fingerprint: "SHA256:test-fingerprint" },
+        });
+      else await route.fulfill({ json: { id: 1 } });
+      return;
+    }
+    const payload: Record<string, any> = {
+      "/auth/me": {
+        user: { id: 1, username: "tester", role: "admin", must_change: false },
+        csrf: "csrf",
+      },
+      "/repositories": [
+        {
+          repository: { id: 100, name: "sync-repo", kind: "filesystem" },
+          storage: {},
+        },
+      ],
+      "/sync/tasks": [],
+      "/sync/runs": { items: [], total: 0 },
+      "/overview": {},
+    };
+    await route.fulfill({ json: payload[path] || [] });
+  });
+  await page.goto("/#sync");
+  await expect(
+    page.getByRole("heading", { name: "数据同步", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "添加数据同步", exact: true }).click();
+  await page.getByLabel("访问方式", { exact: true }).click();
+  await page
+    .getByRole("option", {
+      name: "SFTP · 普通文件采集（源端无需安装软件）",
+      exact: true,
+    })
+    .click();
+  await expect(page.getByText(/平台自动使用 rclone/)).toBeVisible();
+  await page.getByLabel("源主机地址", { exact: true }).fill("192.0.2.15");
+  await page.getByLabel("登录用户名", { exact: true }).fill("backup");
+  await page.getByLabel("登录密码", { exact: true }).fill("protected-password");
+  await page.getByLabel("源目录", { exact: true }).fill("/data");
+  await page
+    .getByRole("button", { name: "测试连接与浏览目录", exact: true })
+    .click();
+  await expect(
+    page.getByText("SHA256:test-fingerprint", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "信任此指纹并测试连接", exact: true })
+    .click();
+  await expect(page.getByText("已连接 · /data", { exact: true })).toBeVisible();
+  await page.getByLabel("备份到仓库", { exact: true }).click();
+  await page.getByRole("option", { name: "sync-repo", exact: true }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  expect(writes.at(-1).path).toBe("/sync/tasks");
+  expect(writes.at(-1).body).toMatchObject({
+    access_method: "sftp",
+    interval_seconds: 60,
+    max_delete_percent: 20,
+    repository_id: 100,
+    fingerprint: "SHA256:test-fingerprint",
+    source_path: "/data",
+    password: "protected-password",
+  });
+  await expect(
+    page.getByRole("dialog", { name: "添加数据同步", exact: true }),
+  ).toHaveCount(0);
+});

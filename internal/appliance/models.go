@@ -114,3 +114,48 @@ type Setting struct {
 	Key   string `gorm:"primaryKey"`
 	Value string
 }
+
+// SyncTask stores connection configuration separately from encrypted credentials.
+type SyncTask struct {
+	ID                     uint       `json:"id" gorm:"primaryKey"`
+	Name                   string     `json:"name" gorm:"uniqueIndex;not null"`
+	RepositoryID           uint       `json:"repository_id" gorm:"uniqueIndex;not null"`
+	AccessMethod           string     `json:"access_method"`
+	Host                   string     `json:"host"`
+	Port                   int        `json:"port"`
+	Username               string     `json:"username"`
+	AuthMethod             string     `json:"auth_method"`
+	Credential             string     `json:"-"`
+	HostKey                string     `json:"-"`
+	Fingerprint            string     `json:"fingerprint"`
+	SourcePath             string     `json:"source_path"`
+	BandwidthKiBps         int        `json:"bandwidth_kibps"`
+	IntervalSeconds        int        `json:"interval_seconds"`
+	MaxDeletePercent       int        `json:"max_delete_percent"`
+	AllowEmpty             bool       `json:"allow_empty"`
+	Enabled                bool       `json:"enabled"`
+	CurrentGeneration      string     `json:"current_generation"`
+	LastSnapshotGeneration string     `json:"last_snapshot_generation"`
+	LastSuccessAt          *time.Time `json:"last_success_at"`
+	NextRunAt              time.Time  `json:"next_run_at"`
+	LastError              string     `json:"last_error"`
+	Failures               int        `json:"failures"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+}
+type SyncRun struct {
+	TransferredBytes int64      `json:"transferred_bytes"`
+	ID               uint       `json:"id" gorm:"primaryKey"`
+	TaskID           uint       `json:"task_id" gorm:"index"`
+	JobID            uint       `json:"job_id" gorm:"uniqueIndex"`
+	Status           string     `json:"status"`
+	Phase            string     `json:"phase"`
+	Generation       string     `json:"generation"`
+	Bytes            int64      `json:"bytes"`
+	Files            int64      `json:"files"`
+	DeletedFiles     int64      `json:"deleted_files"`
+	Error            string     `json:"error"`
+	Log              string     `json:"log"`
+	StartedAt        time.Time  `json:"started_at"`
+	FinishedAt       *time.Time `json:"finished_at"`
+}

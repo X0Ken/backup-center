@@ -35,6 +35,17 @@ func (a *App) snapshotRoot(c *gin.Context) (*os.Root, string, error) {
 		return nil, "", errors.New("挂载路径不在管理范围内")
 	}
 	root, e := os.OpenRoot(filepath.Join(d.Mountpoint, ".zfs", "snapshot", strings.SplitN(snap, "@", 2)[1]))
+	if e == nil {
+		link, err := root.Readlink("current")
+		if err == nil && strings.HasPrefix(link, ".versions/g-") && link == filepath.Join(".versions", filepath.Base(filepath.Dir(link)), "data") {
+			published, err := root.OpenRoot(link)
+			root.Close()
+			if err != nil {
+				return nil, "", err
+			}
+			root = published
+		}
+	}
 	path := c.DefaultQuery("path", ".")
 	if filepath.IsAbs(path) || strings.ContainsRune(path, 0) {
 		if root != nil {

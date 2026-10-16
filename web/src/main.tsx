@@ -1,3 +1,4 @@
+import DataSync from "./pages/DataSync";
 import { currentPage } from "./navigation";
 import Policies from "./pages/Policies";
 import Repositories from "./pages/Repositories";
@@ -64,6 +65,7 @@ const nav = [
   ["snapshots", "快照", IconCamera],
   ["policies", "快照策略", IconSettings],
   ["protocols", "共享访问", IconLink],
+  ["sync", "数据同步", IconSync],
   ["replication", "异地复制", IconSync],
   ["monitor", "监控告警", IconDashboard],
   ["jobs", "任务中心", IconList],
@@ -241,6 +243,7 @@ function App() {
                         "设置分层保留数量，系统自动计算快照频率并清理过期恢复点",
                       protocols:
                         "按仓库类型添加 NFS 或 iSCSI 访问方式，管理客户端权限与挂载入口",
+                      sync: "通过 SSH 或 SFTP 持续拉取业务文件，完成一轮后发布有效版本，并结合快照策略保留恢复点",
                       replication:
                         "通过 SSH 将快照增量复制到独立主机，支持严格主机验证和中断续传；接收端快照 GUID 校验成功后推进复制基线",
                       monitor: "跟踪存储健康、容量变化与待处理告警",
@@ -309,6 +312,14 @@ function App() {
             />
           )}
 
+          {page === "sync" && (
+            <DataSync
+              repos={repos.data}
+              rev={rev}
+              admin={admin}
+              refresh={refresh}
+            />
+          )}
           {page === "replication" && (
             <Replications
               rev={rev}
@@ -342,7 +353,7 @@ function App() {
         <footer>
           <span>Backup Center</span>
           <span>独立备份 · 定期验证 · 从容恢复</span>
-          <span>v{overview.data?.version || "1.2.0"}</span>
+          <span>v{overview.data?.version || "1.3.0"}</span>
         </footer>
       </div>
       {dialog && (

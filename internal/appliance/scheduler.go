@@ -216,6 +216,12 @@ func (a *App) ensurePolicyPeriod(ctx context.Context, p Policy, now time.Time) e
 	if err := validatePolicy(p); err != nil {
 		return err
 	}
+	var task SyncTask
+	if a.DB.Where("repository_id = ?", p.RepositoryID).First(&task).Error == nil {
+		if a.syncBusyRepo(p.RepositoryID) || task.CurrentGeneration == "" || task.LastSnapshotGeneration == task.CurrentGeneration || task.LastSuccessAt == nil || policyPeriod(p, *task.LastSuccessAt) != policyPeriod(p, now) {
+			return nil
+		}
+	}
 	r, err := a.repo(p.RepositoryID)
 	if err != nil {
 		return err
@@ -293,6 +299,9 @@ func (a *App) execute(j Job) (string, error) {
 		r, err := a.repo(q.ID)
 		if err != nil {
 			return "", err
+		}
+		if a.syncBusyRepo(r.ID) {
+			return "", errors.New("该仓库正在同步，请稍后修改属性")
 		}
 		if r.Kind == "volume" {
 			for k := range q.Properties {
@@ -381,6 +390,9 @@ func (a *App) execute(j Job) (string, error) {
 		r, err := a.repo(id)
 		if err != nil {
 			return "", err
+		}
+		if a.syncBusyRepo(r.ID) {
+			return "", errors.New("仓库正在同步，请先暂停并等待任务停止")
 		}
 		if err = a.owned(ctx, r.Dataset); err != nil {
 			return "", err

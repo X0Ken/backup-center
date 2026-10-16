@@ -24,7 +24,13 @@ type backupUser struct {
 	Disabled, MustChange     bool
 	CreatedAt                time.Time
 }
+type backupSyncTask struct {
+	Task       SyncTask
+	Credential string
+	HostKey    string
+}
 type configBundle struct {
+	SyncTasks    []backupSyncTask
 	Schema       int
 	Pool         string
 	CreatedAt    time.Time
@@ -106,6 +112,13 @@ func (a *App) backupBundle(password string) ([]byte, error) {
 				return e
 			}
 		}
+		var tasks []SyncTask
+		if e := tx.Find(&tasks).Error; e != nil {
+			return e
+		}
+		for _, task := range tasks {
+			b.SyncTasks = append(b.SyncTasks, backupSyncTask{task, task.Credential, task.HostKey})
+		}
 		return nil
 	})
 	if err != nil {
@@ -141,6 +154,9 @@ func (a *App) backupBundle(password string) ([]byte, error) {
 	return encryptBundle(plain, password)
 }
 func validBackupFile(name string) bool {
+	if name == "keys/.sync-master.key" {
+		return true
+	}
 	if strings.HasPrefix(name, "keys/") {
 		return strings.HasSuffix(name, ".key") && validName(strings.TrimSuffix(strings.TrimPrefix(name, "keys/"), ".key")) == nil
 	}
@@ -240,6 +256,18 @@ func (a *App) RestoreConfig(data []byte, password string) error {
 						return e
 					}
 				}
+			}
+		}
+		for _, item := range b.SyncTasks {
+			task := item.Task
+			task.Credential = item.Credential
+			task.HostKey = item.HostKey
+			task.Enabled = false
+			if task.RepositoryID == 0 || task.Credential == "" || task.HostKey == "" {
+				return errors.New("同步任务备份无效")
+			}
+			if e := tx.Create(&task).Error; e != nil {
+				return e
 			}
 		}
 		return nil

@@ -382,6 +382,8 @@ func (a *App) exportConfig(c *gin.Context) {
 	var repos []Repository
 	var policies []Policy
 	var exports []Export
+	var syncTasks []SyncTask
+	a.DB.Find(&syncTasks)
 	var reps []Replication
 	a.DB.Find(&repos)
 	a.DB.Find(&policies)
@@ -389,7 +391,7 @@ func (a *App) exportConfig(c *gin.Context) {
 	a.DB.Find(&reps)
 	c.Header("Content-Disposition", "attachment; filename=backup-center-config.json")
 	a.audit(current(c).ID, current(c).Username, "config.export", "", "", c.ClientIP())
-	c.JSON(200, gin.H{"schema": 1, "version": Version, "exported_at": time.Now(), "pool": a.Config.Pool, "repositories": repos, "policies": policies, "exports": exports, "replications": reps, "includes_secrets": false, "note": "用户、加密密钥、SSH 私钥和通知凭证需通过离线配置备份另行保管"})
+	c.JSON(200, gin.H{"schema": 1, "version": Version, "exported_at": time.Now(), "pool": a.Config.Pool, "repositories": repos, "policies": policies, "exports": exports, "replications": reps, "sync_tasks": syncTasks, "includes_secrets": false, "note": "用户、加密密钥、SSH 私钥和通知凭证需通过离线配置备份另行保管"})
 }
 func (a *App) configCheckpoint(c *gin.Context) {
 	path := filepath.Join(a.Config.DataDir, "checkpoints")
