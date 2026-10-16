@@ -1,13 +1,6 @@
 import { useRepositoryFilter } from "../navigation";
 import React from "react";
-import {
-  Alert,
-  Button,
-  Message,
-  Modal,
-  Select,
-  Tag,
-} from "@arco-design/web-react";
+import { Alert, Button, Message, Modal, Tag } from "@arco-design/web-react";
 import { api, date } from "../api";
 import { DataTable, ErrorBox, Row, useData } from "../components";
 import { Tools, repoOptions } from "../types";
@@ -108,15 +101,24 @@ export default function Policies({
   return (
     <>
       <div className="section-toolbar">
-        <Select
-          aria-label="按仓库筛选策略"
-          placeholder="全部仓库"
-          allowClear
-          value={repositoryFilter}
-          onChange={setRepositoryFilter}
-          options={repoOptions(repos)}
-          style={{ width: 240 }}
-        />
+        <div className="row-actions">
+          {repositoryFilter ? (
+            <>
+              <Tag>
+                {repos?.find((r) => r.repository.id === repositoryFilter)
+                  ?.repository.name || `仓库 #${repositoryFilter}`}
+              </Tag>
+              <Button
+                type="text"
+                onClick={() => setRepositoryFilter(undefined)}
+              >
+                显示全部仓库
+              </Button>
+            </>
+          ) : (
+            <span className="muted">全部仓库 · 输入仓库名或关键词筛选</span>
+          )}
+        </div>
         {admin && (
           <Button
             type="primary"

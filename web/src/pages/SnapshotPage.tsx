@@ -1,6 +1,6 @@
 import { useRepositoryFilter } from "../navigation";
-import React, { useState } from "react";
-import { Button, Modal, Select, Tag } from "@arco-design/web-react";
+import React from "react";
+import { Button, Modal, Tag } from "@arco-design/web-react";
 import { IconCamera } from "@arco-design/web-react/icon";
 import { api, bytes, date } from "../api";
 import { DataTable, ErrorBox, Row } from "../components";
@@ -22,15 +22,21 @@ export default function SnapshotPage({
   return (
     <>
       <div className="section-toolbar">
-        <Select
-          aria-label="按仓库筛选快照"
-          placeholder="全部仓库"
-          allowClear
-          value={filter}
-          onChange={setFilter}
-          options={repoOptions(repos)}
-          style={{ width: 240 }}
-        />
+        <div className="row-actions">
+          {filter ? (
+            <>
+              <Tag>
+                {repos?.find((r) => r.repository.id === filter)?.repository
+                  .name || `仓库 #${filter}`}
+              </Tag>
+              <Button type="text" onClick={() => setFilter(undefined)}>
+                显示全部仓库
+              </Button>
+            </>
+          ) : (
+            <span className="muted">全部仓库 · 输入仓库名或关键词筛选</span>
+          )}
+        </div>
         <div className="row-actions">
           <Button
             onClick={() =>

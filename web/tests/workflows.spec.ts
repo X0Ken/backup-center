@@ -269,6 +269,9 @@ test("repository shortcuts preserve filters, pagination totals and fixed policy 
   await page.getByRole("heading", { name: "备份仓库", exact: true }).click();
   await row.getByRole("button", { name: "查看快照", exact: true }).click();
   await expect(page).toHaveURL(/#snapshots\?repository_id=24$/);
+  await expect(page.getByLabel("按仓库筛选快照", { exact: true })).toHaveCount(
+    0,
+  );
   const snaps = page.getByLabel("快照表格", { exact: true });
   await expect(snaps.getByRole("status")).toHaveText("共 2 条 · 第 1 / 1 页");
   await expect(snaps.locator("tbody tr")).toHaveCount(2);
@@ -280,12 +283,31 @@ test("repository shortcuts preserve filters, pagination totals and fixed policy 
   await expect(snaps.locator("tbody")).not.toContainText("repo-24@bc-");
   await page.reload();
   await expect(snaps.getByRole("status")).toHaveText("共 2 条 · 第 1 / 1 页");
+  await page.getByRole("button", { name: "显示全部仓库", exact: true }).click();
+  await expect(page).toHaveURL(/#snapshots$/);
+  await expect(snaps.getByRole("status")).toHaveText("共 50 条 · 第 1 / 5 页");
+  await page.getByLabel("筛选快照", { exact: true }).fill("repo-25");
+  await expect(snaps.getByRole("status")).toHaveText(
+    "共 2 条（筛选前 50 条） · 第 1 / 1 页",
+  );
   await page.evaluate(() => {
     location.hash = "policies?repository_id=24";
   });
   await expect(
     page.getByLabel("快照策略表格", { exact: true }).getByRole("status"),
   ).toHaveText("共 1 条 · 第 1 / 1 页");
+  await expect(page.getByLabel("按仓库筛选策略", { exact: true })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "显示全部仓库", exact: true }).click();
+  const policies = page.getByLabel("快照策略表格", { exact: true });
+  await expect(policies.getByRole("status")).toHaveText(
+    "共 25 条 · 第 1 / 3 页",
+  );
+  await page.getByLabel("筛选快照策略", { exact: true }).fill("repo-24");
+  await expect(policies.getByRole("status")).toHaveText(
+    "共 1 条（筛选前 25 条） · 第 1 / 1 页",
+  );
 });
 
 test("unified data sync handles host trust and engine-specific credentials", async ({
