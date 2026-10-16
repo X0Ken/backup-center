@@ -460,6 +460,27 @@ test("platform replication uses system pairing and a repository-only task form",
   await expect(
     page.getByRole("heading", { name: "异地复制平台互信" }),
   ).toBeVisible();
+  const trustSection = page
+    .locator("section")
+    .filter({
+      has: page.getByRole("heading", { name: "异地复制平台互信", exact: true }),
+    });
+  const notificationSection = page
+    .locator("section")
+    .filter({
+      has: page.getByRole("heading", {
+        name: "告警通知与配置备份",
+        exact: true,
+      }),
+    });
+  const trustBox = await trustSection.boundingBox();
+  const notificationBox = await notificationSection.boundingBox();
+  expect(trustBox).not.toBeNull();
+  expect(notificationBox).not.toBeNull();
+  expect(notificationBox!.y).toBeGreaterThanOrEqual(
+    trustBox!.y + trustBox!.height,
+  );
+  await expect(trustSection.locator("section")).toHaveCount(0);
   await page
     .getByRole("button", { name: "生成接收配对码", exact: true })
     .click();

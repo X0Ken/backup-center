@@ -10,8 +10,9 @@ StartLimitBurst=5
 [Service]
 Type=simple
 Environment=TZ=Asia/Shanghai
+Environment=BACKUP_CENTER_URL=https://192.0.2.10
 EnvironmentFile=-/etc/backup-center/backupd.env
-ExecStart=/opt/backup-center/backupd --listen 127.0.0.1:8080 --data-dir /var/lib/backup-center --pool backup-pool --web-dir /opt/backup-center/web --external-url https://192.0.2.10
+ExecStart=/opt/backup-center/backupd --listen 127.0.0.1:8080 --data-dir /var/lib/backup-center --pool backup-pool --web-dir /opt/backup-center/web --external-url ${BACKUP_CENTER_URL}
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45

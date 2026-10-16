@@ -202,13 +202,13 @@ export default function System({
               },
             ]}
           />
+          <PeerSettings
+            rev={rev}
+            form={form}
+            refresh={refresh}
+            showText={showText}
+          />
           <section>
-            <PeerSettings
-              rev={rev}
-              form={form}
-              refresh={refresh}
-              showText={showText}
-            />
             <h2>告警通知与配置备份</h2>
             <div className="settings-actions">
               <Button

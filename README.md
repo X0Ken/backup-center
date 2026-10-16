@@ -54,6 +54,8 @@ sudo ./scripts/install.sh
 sudo cat /etc/backup-center/initial-admin-password
 ```
 
+部署到其他节点时可执行 `sudo BACKUP_CENTER_URL=https://目标IP ./scripts/install.sh`；地址写入 `/etc/backup-center/backupd.env`，新证书自动包含该地址及本机 IP，已有证书保持不变。
+
 安装后访问 `https://192.0.2.10`，管理账号为 `admin`，首次登录强制修改密码。安装器生成设备专属 TLS 证书；企业上线时应将 `/etc/backup-center/tls/server.crt` 和 `server.key` 替换为内部 CA 签发的证书，再执行 `nginx -t && systemctl reload nginx`。证书需覆盖实际访问 IP/DNS。验证设备证书指纹：
 
 ```bash
@@ -132,7 +134,7 @@ systemctl list-timers backup-center-scrub.timer
 
 ## 验收与开发
 
-只读页面不会生成演示数据。所有仓库、快照、池和协议状态来自真实宿主机。`scripts/acceptance.py` 必须在设备上显式 `--run`，创建小型临时仓库并清理；包含真实文件校验、克隆/回滚、NFS 内核挂载与写入、生成脚本、原生加密、LIO 以及加密配置恢复。平台间复制另由 `scripts/verify-platform-replication.py` 在专用隔离实例上显式 `--run` 验收，覆盖远端幂等登记、全量/增量、真实上传断开、两端重启续传、加密仓库和块卷的克隆恢复，保留验收数据。仅在没有生产写入的受控环境运行这些测试。
+只读页面不会生成演示数据。所有仓库、快照、池和协议状态来自真实宿主机。`scripts/acceptance.py` 必须在设备上显式 `--run`，创建小型临时仓库并清理；包含真实文件校验、克隆/回滚、NFS 内核挂载与写入、生成脚本、原生加密、LIO 以及加密配置恢复。平台间复制另由 `scripts/verify-platform-replication.py` 在专用隔离实例上显式 `--run` 验收，覆盖远端幂等登记、全量/增量、真实上传断开、两端重启续传、加密仓库和块卷的克隆恢复，保留验收数据。`scripts/verify-cross-host-replication.py` 可针对两台实际部署的平台验证真实网络传输、断开续传、加密与块卷恢复；需显式 `--run`、两端临时验收账号及受限权限的凭证文件，仅操作新建的专用验收仓库并保留数据。仅在没有生产写入的受控环境运行这些测试。
 
 ```bash
 sudo python3 scripts/acceptance.py --run \

@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 # Install a built release on a host with an existing ZFS pool. Does not erase disks.
 set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 [[ $EUID == 0 ]] || { echo 'Run as root' >&2; exit 1; }
 cd "$(dirname "$0")/.."
+export BACKUP_CENTER_URL="${BACKUP_CENTER_URL:-https://192.0.2.10}"
+python3 - <<'CHECK_URL'
+import os, urllib.parse
+u=urllib.parse.urlsplit(os.environ['BACKUP_CENTER_URL'])
+if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('','/') or any(c.isspace() for c in os.environ['BACKUP_CENTER_URL']):
+    raise SystemExit('BACKUP_CENTER_URL must be an HTTPS origin')
+CHECK_URL
 command -v zfs >/dev/null
 zpool list -H backup-pool >/dev/null
 for cmd in nginx exportfs targetcli smartctl rsync rclone sshpass; do command -v "$cmd" >/dev/null || { echo "Missing dependency: $cmd" >&2; exit 1; }; done
@@ -16,11 +24,35 @@ install -m 0755 scripts/export-pool.sh /opt/backup-center/export-pool.sh
 find /opt/backup-center/web -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 cp -a web/dist/. /opt/backup-center/web/
 chmod -R a+rX /opt/backup-center/web
+python3 - <<'SAVE_URL'
+import os
+from pathlib import Path
+p=Path('/etc/backup-center/backupd.env')
+lines=p.read_text().splitlines() if p.exists() else []
+lines=[line for line in lines if not line.startswith('BACKUP_CENTER_URL=')]
+lines.append('BACKUP_CENTER_URL='+os.environ['BACKUP_CENTER_URL'])
+p.write_text('\n'.join(lines)+'\n');p.chmod(0o600)
+SAVE_URL
 if [[ ! -f /etc/backup-center/tls/server.key ]]; then
+  certificate_sans="$(python3 - <<'CERT_SANS'
+import ipaddress, os, subprocess, urllib.parse
+host=urllib.parse.urlsplit(os.environ['BACKUP_CENTER_URL']).hostname
+try:
+    ipaddress.ip_address(host);sans=['IP:'+host]
+except ValueError:
+    sans=['DNS:'+host]
+for addr in subprocess.check_output(['hostname','-I'],text=True).split():
+    try:ipaddress.ip_address(addr)
+    except ValueError:continue
+    if 'IP:'+addr not in sans:sans.append('IP:'+addr)
+sans.append('DNS:backup.example.com')
+print(','.join(sans))
+CERT_SANS
+)"
   openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
     -keyout /etc/backup-center/tls/server.key -out /etc/backup-center/tls/server.crt \
     -subj '/CN=backup.example.com/O=Backup Center' \
-    -addext 'subjectAltName=IP:192.0.2.10,IP:192.0.2.13,DNS:backup.example.com' \
+    -addext "subjectAltName=$certificate_sans" \
     -addext 'extendedKeyUsage=serverAuth'
   chmod 0600 /etc/backup-center/tls/server.key
 fi

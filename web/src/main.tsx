@@ -353,7 +353,7 @@ function App() {
         <footer>
           <span>Backup Center</span>
           <span>独立备份 · 定期验证 · 从容恢复</span>
-          <span>v{overview.data?.version || "1.4.0"}</span>
+          <span>v{overview.data?.version || "1.4.1"}</span>
         </footer>
       </div>
       {dialog && (
