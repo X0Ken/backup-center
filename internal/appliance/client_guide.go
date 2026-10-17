@@ -21,7 +21,7 @@ func (a *App) clientGuide(c *gin.Context) {
 		failure(c, 400, errors.New("请先启用仓库的共享访问"))
 		return
 	}
-	server := "192.0.2.10"
+	server := "backup.example.com"
 	if a.Config.ExternalURL != "" {
 		server = strings.TrimPrefix(strings.TrimPrefix(a.Config.ExternalURL, "https://"), "http://")
 		server = strings.Split(server, ":")[0]

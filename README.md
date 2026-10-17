@@ -45,18 +45,20 @@ npm audit --prefix web --omit=dev --registry=https://registry.npmjs.org
 
 ## 安装
 
+文档与界面中的 `example.com` 域名和 `192.0.2.0/24`、`198.51.100.0/24`、`203.0.113.0/24` 地址均为示例，部署或验收前必须替换为实际环境配置。
+
 OpenCloudOS 9 可先运行 `sudo ./scripts/install-zfs-opencloudos.sh` 安装经 SHA-256 校验的固定版本 OpenZFS、匹配内核开发包与 DKMS 模块。此步骤需要软件源访问能力，不创建或清空存储池。
 
 先准备一个名为 `backup-pool` 的真实 ZFS 池。**安装脚本不擦盘**。首次创建 Mirror 的破坏性脚本独立为 `scripts/provision-mirror.sh`，必须传入明确擦盘参数、两个 NVMe 设备及其预期序列号；该工具拒绝已挂载设备、系统盘和跨盘卷组。仅在已经核实磁盘并获准清空时使用。
 
 ```bash
-sudo ./scripts/install.sh
+sudo BACKUP_CENTER_URL=https://backup.example.com ./scripts/install.sh
 sudo cat /etc/backup-center/initial-admin-password
 ```
 
-部署到其他节点时可执行 `sudo BACKUP_CENTER_URL=https://目标IP ./scripts/install.sh`；地址写入 `/etc/backup-center/backupd.env`，新证书自动包含该地址及本机 IP，已有证书保持不变。
+安装时必须通过 `BACKUP_CENTER_URL` 指定实际 HTTPS 地址；地址写入 `/etc/backup-center/backupd.env`，新证书自动包含该地址及本机 IP，已有证书保持不变。
 
-安装后访问 `https://192.0.2.10`，管理账号为 `admin`，首次登录强制修改密码。安装器生成设备专属 TLS 证书；企业上线时应将 `/etc/backup-center/tls/server.crt` 和 `server.key` 替换为内部 CA 签发的证书，再执行 `nginx -t && systemctl reload nginx`。证书需覆盖实际访问 IP/DNS。验证设备证书指纹：
+安装后访问配置的 HTTPS 地址，管理账号为 `admin`，首次登录强制修改密码。安装器生成设备专属 TLS 证书；企业上线时应将 `/etc/backup-center/tls/server.crt` 和 `server.key` 替换为内部 CA 签发的证书，再执行 `nginx -t && systemctl reload nginx`。证书需覆盖实际访问 IP/DNS。验证设备证书指纹：
 
 ```bash
 openssl x509 -in /etc/backup-center/tls/server.crt -noout -sha256 -fingerprint
@@ -140,13 +142,14 @@ systemctl list-timers backup-center-scrub.timer
 
 ```bash
 sudo python3 scripts/acceptance.py --run \
+  --url https://backup.example.com --storage-address 192.0.2.10 \
   --password-file /etc/backup-center/initial-admin-password
 # 首次运行测试会完成强制密码修改，并更新该 0600 文件。
 
 # 浏览器验收：需已安装 Playwright Chromium，或指定系统 Chrome
 cd web
 BC_TEST_USER=admin BC_TEST_PASSWORD_FILE=/secure/admin-password \
-BACKUP_CENTER_URL=https://192.0.2.10 \
+BACKUP_CENTER_URL=https://backup.example.com \
 BC_TEST_MUTATION=1 npm test
 ```
 

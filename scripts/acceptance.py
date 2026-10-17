@@ -6,6 +6,7 @@ Requires explicit --run and an administrator password file. No mocks.
 import argparse
 import hashlib
 import http.cookiejar
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,9 @@ import urllib.request
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', action='store_true', required=True)
-    parser.add_argument('--url', default='https://192.0.2.10')
+    parser.add_argument('--url', required=True)
+    parser.add_argument('--storage-address', required=True, type=ipaddress.ip_address,
+                        help='Appliance local storage IP used for the NFS mount and client ACL')
     parser.add_argument('--password-file', required=True)
     parser.add_argument('--certificate', default='/etc/backup-center/tls/server.crt')
     args = parser.parse_args()
@@ -95,7 +98,7 @@ def main():
     assert file.read_bytes() == b'modified-data'
     print('PASS: latest-snapshot rollback', flush=True)
     # NFS is tested through a real kernel mount; writes run with UID 1000 under root_squash.
-    export = {'repository_id': repo['id'], 'protocol': 'nfs', 'clients': '192.0.2.13/32', 'read_only': False, 'enabled': True, 'iqn': '', 'initiators': ''}
+    export = {'repository_id': repo['id'], 'protocol': 'nfs', 'clients': str(args.storage_address) + ('/32' if args.storage_address.version == 4 else '/128'), 'read_only': False, 'enabled': True, 'iqn': '', 'initiators': ''}
     result = request('/exports', 'PUT', export)
     for _ in range(120):
         current = next(j for j in request('/jobs') if j['id'] == result['id'])
@@ -105,7 +108,8 @@ def main():
     assert current['status'] == 'succeeded'
     nfs_mount = Path('/mnt') / prefix
     nfs_mount.mkdir()
-    subprocess.run(['mount', '-t', 'nfs4', '-o', 'vers=4.2', '192.0.2.13:' + str(mount), str(nfs_mount)], check=True, timeout=30)
+    nfs_server = str(args.storage_address) if args.storage_address.version == 4 else '[' + str(args.storage_address) + ']'
+    subprocess.run(['mount', '-t', 'nfs4', '-o', 'vers=4.2', nfs_server + ':' + str(mount), str(nfs_mount)], check=True, timeout=30)
     try:
         assert subprocess.check_output(['setpriv', '--reuid=1000', '--regid=1000', '--clear-groups', 'cat', str(nfs_mount / 'restore-proof.bin')]) == b'modified-data'
         subprocess.run(['setpriv', '--reuid=1000', '--regid=1000', '--clear-groups', 'sh', '-c', 'printf nfs-write-proof > "$1"', 'sh', str(nfs_mount / 'nfs-proof')], check=True)

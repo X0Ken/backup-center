@@ -67,7 +67,7 @@ type pairCode struct {
 func validPeerURL(raw string) error {
 	u, e := url.Parse(raw)
 	if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("请输入目标平台的 HTTPS 地址，例如 https://192.0.2.11")
+		return errors.New("请输入目标平台的 HTTPS 地址，例如 https://peer.example.com")
 	}
 	return nil
 }

@@ -48,7 +48,7 @@ export default function PeerSettings({
                   key: "url",
                   label: "目标平台 HTTPS 地址",
                   required: true,
-                  help: "例如 https://192.0.2.11；目标平台必须部署相同版本。",
+                  help: "例如 https://peer.example.com；目标平台必须部署相同版本。",
                 },
                 {
                   key: "code",

@@ -4,7 +4,8 @@ set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 [[ $EUID == 0 ]] || { echo 'Run as root' >&2; exit 1; }
 cd "$(dirname "$0")/.."
-export BACKUP_CENTER_URL="${BACKUP_CENTER_URL:-https://192.0.2.10}"
+: "${BACKUP_CENTER_URL:?Set BACKUP_CENTER_URL to the appliance HTTPS origin}"
+export BACKUP_CENTER_URL
 python3 - <<'CHECK_URL'
 import os, urllib.parse
 u=urllib.parse.urlsplit(os.environ['BACKUP_CENTER_URL'])

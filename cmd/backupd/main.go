@@ -27,7 +27,7 @@ func run() error {
 	flag.StringVar(&cfg.DataDir, "data-dir", "/var/lib/backup-center", "private state directory")
 	flag.StringVar(&cfg.Pool, "pool", "backup-pool", "existing ZFS storage pool")
 	flag.StringVar(&cfg.WebDir, "web-dir", "/opt/backup-center/web", "built SPA directory")
-	flag.StringVar(&cfg.ExternalURL, "external-url", "https://192.0.2.10", "public origin")
+	flag.StringVar(&cfg.ExternalURL, "external-url", "https://backup.example.com", "public origin")
 	flag.BoolVar(&cfg.SecureCookie, "secure-cookie", true, "require HTTPS session cookies")
 	flag.StringVar(&initAdmin, "init-admin", "", "initialize first administrator and exit")
 	flag.StringVar(&passwordFile, "password-file", "", "read initial password from a protected file")
